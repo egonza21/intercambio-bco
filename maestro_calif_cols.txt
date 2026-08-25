@@ -1,0 +1,55 @@
+name	type	comment
+num_doc	bigint	Número de  identificación de 15 caracteres
+tipo_doc	tinyint	Tipo Identificación del cliente
+segmento	string	Segmento al que pertenece el cliente
+pd_consumo	double	Probabilidad default consumo
+g_consumo	string	Grupo riesgo consumo
+modelo_consumo	string	Modelo consumo
+pd_tdc	double	Probabilidad default tarjeta de credito
+g_tdc	string	Grupo riesgo tarjeta de credito
+modelo_tdc	string	Modelo tarjeta de credito
+pd_libranza	double	Probabilidad default libranza
+g_libranza	string	Grupo riesgo libranza
+modelo_libranza	string	Modelo libranza
+pd_rota	double	Probabilidad default rotativo
+g_rota	string	Grupo riesgo rotativo
+modelo_rota	string	Modelo rotativo
+pd_hip_vis	double	Probabilidad default hipotecario vis
+g_hip_vis	string	Grupo riesgo hipotecario vis
+modelo_hip_vis	string	Modelo hipotecario vis
+pd_hip_novis	double	Probabilidad default hipotecario no vis
+g_hip_novis	string	Grupo riesgo hipotecario no vis
+modelo_hip_novis	string	Modelo hipotecario no vis
+pd_lea_hab_vis	double	Probabilidad default leasing habitacional vis
+g_lea_hab_vis	string	Grupo riesgo leasing habitacional vis
+modelo_lea_hab_vis	string	Modelo leasing habitacional vis
+pd_lea_hab_novis	double	Probabilidad default leasing habitacional no vis
+g_lea_hab_novis	string	Grupo riesgo leasing habitacional no vis
+modelo_lea_hab_novis	string	Modelo leasing habitacional no vis
+pd_comercial	double	Probabilidad default comercial
+g_comercial	string	Grupo riesgo comercial
+modelo_comercial	string	Modelo comercial
+pd_micro	double	Probabilidad default micro credito
+g_micro	string	Grupo riesgo micro credito
+modelo_micro	string	Modelo micro credito
+pd_sobre	double	Probabilidad default sobregiro
+g_sobre	string	Grupo riesgo sobregiro
+modelo_sobre	string	Modelo sobregiro
+pd_sufi_veh	double	Probabilidad default sufi vehiculo
+g_sufi_veh	string	Grupo riesgo sufi vehiculo
+modelo_sufi_veh	string	Modelo sufi vehiculo
+pd_sufi_moto	double	Probabilidad default sufi moto
+g_sufi_moto	string	Grupo riesgo sufi moto
+modelo_sufi_moto	string	Modelo sufi moto
+pd_sufi_cpe	double	Probabilidad default sufi cartera para estudiante
+g_sufi_cpe	string	Grupo riesgo sufi cartera para estudiante
+modelo_sufi_cpe	string	Modelo sufi cartera para estudiante
+pd_sufi_con	double	Probabilidad default sufi consumo
+g_sufi_con	string	Grupo riesgo sufi consumo
+modelo_sufi_con	string	Modelo sufi consumo
+pd_calm	double	Probabilidad default credito a la mano
+g_calm	string	Grupo riesgo credito a la mano
+modelo_calm	string	Modelo credito a la mano
+ingestion_day	tinyint	Día de Ingestión
+ingestion_year	smallint	Año de Ingestión y campo partición
+ingestion_month	tinyint	Mes de Ingestión y campo partición
