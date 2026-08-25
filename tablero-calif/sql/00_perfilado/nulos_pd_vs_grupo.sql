@@ -1,20 +1,26 @@
 -- ============================================================================
--- Fragmento canónico: CTE de productos
+-- Perfilado: ¿coincide pd nulo con grupo nulo? ¿hay nulos representados como
+-- cadena?
 -- ----------------------------------------------------------------------------
--- Impala no tiene stack() ni includes, así que este bloque se copia en cada
--- query que necesite despivotar resultados_riesgos.maestro_calificaciones_pn.
--- ESTA ES LA COPIA DE REFERENCIA: cualquier cambio en el mapeo idx -> producto
--- se hace aquí primero y luego se propaga a los demás archivos.
+-- Pendientes 2 y 3 de CLAUDE.md, sobre la misma tabla larga:
 --
--- El acoplamiento peligroso está en los CASE que acompañan a este CTE: el
--- orden de los WHEN tiene que coincidir con el idx de aquí. Un desalineo no
--- produce error, solo datos mal etiquetados.
+--   1. Si `pd_nulo_grupo_no_nulo` o `pd_no_nulo_grupo_nulo` salen distintos de
+--      cero para algún producto, el criterio de filtro en el resto de las
+--      queries cambia de `pd IS NOT NULL` a `grupo IS NOT NULL`, que es lo
+--      que manda para el tablero (CLAUDE.md, "Decisiones ya tomadas").
+--   2. Si `grupo_cadena_vacia`, `grupo_valor_na`, `modelo_cadena_vacia` o
+--      `modelo_valor_na` salen distintos de cero, hay valores tipo 'NA', ''
+--      o 'SIN CALIFICACION' que un IS NULL no atrapa y que hay que sumar
+--      explícitamente al filtro de nulos.
 --
--- producto          = detalle individual, 16 valores.
--- familia_producto  = agrupación gruesa, 4 valores. Forma jerarquía con
---                     producto en el tablero (drill down).
---                     PROPUESTA, pendiente de confirmar con la clasificación
---                     oficial del banco.
+-- Usa el mismo mapeo idx -> producto de sql/_fragmentos/cte_productos.sql,
+-- copiado aquí porque Impala no soporta includes entre archivos. Cualquier
+-- cambio en el mapeo canónico debe propagarse también a este archivo. El
+-- filtro de partición va antes del cross join para que Impala pode
+-- particiones.
+--
+-- Parámetros:
+--   {DESDE}, {HASTA} -- rango de meses, en ingestion_year*12+ingestion_month
 -- ============================================================================
 
 with productos as (
@@ -36,25 +42,9 @@ with productos as (
     union all select 16, 'calm',          'consumo'
 ),
 
--- ----------------------------------------------------------------------------
--- CTE de unpivot que acompaña al anterior. El filtro de particiones va aquí,
--- antes del cross join, para que Impala pode particiones.
---
--- OJO: el filtro de nulos NO va en este CTE, va en la query que lo consume.
--- La razón es que el criterio correcto (pd IS NOT NULL vs grupo IS NOT NULL)
--- depende del resultado de sql/00_perfilado/nulos_pd_vs_grupo.sql, y la query
--- de cobertura necesita justamente las filas nulas.
--- ----------------------------------------------------------------------------
-
 largo as (
   select
-    c.num_doc,
-    c.tipo_doc,
-    c.ingestion_year,
-    c.ingestion_month,
-    c.segmento,
     p.producto,
-    p.familia_producto,
     case p.idx
       when  1 then c.pd_consumo        when  2 then c.pd_tdc
       when  3 then c.pd_libranza       when  4 then c.pd_rota
@@ -90,5 +80,21 @@ largo as (
   where c.ingestion_year * 12 + c.ingestion_month between {DESDE} and {HASTA}
 )
 
--- Uso: continuar con el SELECT final que consume `largo`, aplicando el filtro
--- de nulos que corresponda.
+select
+  l.producto,
+  count(*) as filas_totales,
+  sum(case when l.pd is null then 1 else 0 end) as pd_nulo,
+  sum(case when l.grupo is null then 1 else 0 end) as grupo_nulo,
+  sum(case when l.pd is null and l.grupo is not null then 1 else 0 end)
+    as pd_nulo_grupo_no_nulo,
+  sum(case when l.pd is not null and l.grupo is null then 1 else 0 end)
+    as pd_no_nulo_grupo_nulo,
+  sum(case when l.grupo = '' then 1 else 0 end) as grupo_cadena_vacia,
+  sum(case when upper(trim(l.grupo)) in ('NA', 'SIN CALIFICACION') then 1 else 0 end)
+    as grupo_valor_na,
+  sum(case when l.modelo = '' then 1 else 0 end) as modelo_cadena_vacia,
+  sum(case when upper(trim(l.modelo)) in ('NA', 'SIN CALIFICACION') then 1 else 0 end)
+    as modelo_valor_na
+from largo l
+group by l.producto
+order by l.producto;

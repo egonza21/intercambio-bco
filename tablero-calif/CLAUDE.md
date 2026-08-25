@@ -8,6 +8,11 @@ Repo de queries SQL (Impala) que alimentan un tablero de Power BI sobre las
 calificaciones de riesgo que se asignan a clientes mes a mes para ofertarles
 productos.
 
+- Tabla fuente: `resultados_riesgos.maestro_calificaciones_pn`
+- Cubre **personas naturales**. Los productos `comercial`, `micro` y
+  `sobregiro` aplican a quienes tienen pequeño negocio, así que su cobertura
+  es estructuralmente baja frente a consumo o tarjeta. **Eso es lo esperado, no
+  una falla del pipeline** — importante al leer el visual de cobertura.
 - ~15 MM de clientes por fecha de análisis.
 - 16 productos, cada uno con su probabilidad de default (`pd`), su grupo de
   riesgo (`g`, de G1 a G8) y el modelo que produjo esa PD.
@@ -50,15 +55,18 @@ productos.
   migración, que toca la tabla dos veces.
 - **El nombre de un CTE no puede chocar** con una tabla existente en la base
   activa. Verificar antes de fijar nombres.
-- **No acepta dos `COUNT(DISTINCT)` en la misma consulta** salvo que se active
-  `APPX_COUNT_DISTINCT`. Usar `NDV()` si hace falta aproximado, o reformular.
+- **No acepta dos o más agregados `COUNT(DISTINCT)` separados en la misma
+  consulta** salvo que se active `APPX_COUNT_DISTINCT`. La forma multicolumna
+  `COUNT(DISTINCT col_a, col_b)` sí es válida: cuenta combinaciones distintas
+  y es un solo agregado. Si la fila tiene nulo en cualquiera de las dos
+  expresiones, se ignora completa.
 - **El filtro de particiones va lo más adentro posible**, antes del cross join,
   para que Impala pode particiones y no lea toda la tabla.
 - `COUNT(columna)` ignora nulos — es la forma directa de medir cobertura.
 
 ## Esquema de la tabla ancha
 
-Tabla fuente: `calificaciones` (nombre real por confirmar).
+`resultados_riesgos.maestro_calificaciones_pn`
 
 ```
 num_doc           bigint    Número de identificación de 15 caracteres
@@ -125,27 +133,34 @@ simplemente etiqueta mal los datos. La copia canónica vive en
 `sql/_fragmentos/cte_productos.sql` y cualquier cambio debe propagarse a todos
 los archivos que lo usen.
 
-| idx | producto        | columnas                                                       | familia    |
-|-----|-----------------|----------------------------------------------------------------|------------|
-| 1   | consumo         | pd_consumo / g_consumo / modelo_consumo                        | consumo    |
-| 2   | tdc             | pd_tdc / g_tdc / modelo_tdc                                    | consumo    |
-| 3   | libranza        | pd_libranza / g_libranza / modelo_libranza                     | consumo    |
-| 4   | rotativo        | pd_rota / g_rota / modelo_rota                                 | consumo    |
-| 5   | hip_vis         | pd_hip_vis / g_hip_vis / modelo_hip_vis                        | vivienda   |
-| 6   | hip_novis       | pd_hip_novis / g_hip_novis / modelo_hip_novis                  | vivienda   |
-| 7   | lea_hab_vis     | pd_lea_hab_vis / g_lea_hab_vis / modelo_lea_hab_vis            | vivienda   |
-| 8   | lea_hab_novis   | pd_lea_hab_novis / g_lea_hab_novis / modelo_lea_hab_novis      | vivienda   |
-| 9   | comercial       | pd_comercial / g_comercial / modelo_comercial                  | comercial  |
-| 10  | micro           | pd_micro / g_micro / modelo_micro                              | comercial  |
-| 11  | sobregiro       | pd_sobre / g_sobre / modelo_sobre                              | comercial  |
-| 12  | sufi_veh        | pd_sufi_veh / g_sufi_veh / modelo_sufi_veh                     | sufi       |
-| 13  | sufi_moto       | pd_sufi_moto / g_sufi_moto / modelo_sufi_moto                  | sufi       |
-| 14  | sufi_cpe        | pd_sufi_cpe / g_sufi_cpe / modelo_sufi_cpe                     | sufi       |
-| 15  | sufi_con        | pd_sufi_con / g_sufi_con / modelo_sufi_con                     | sufi       |
-| 16  | calm            | pd_calm / g_calm / modelo_calm                                 | consumo    |
+| idx | producto        | familia_producto | columnas                                                  |
+|-----|-----------------|------------------|-----------------------------------------------------------|
+| 1   | consumo         | consumo          | pd_consumo / g_consumo / modelo_consumo                   |
+| 2   | tdc             | consumo          | pd_tdc / g_tdc / modelo_tdc                               |
+| 3   | libranza        | consumo          | pd_libranza / g_libranza / modelo_libranza                |
+| 4   | rotativo        | consumo          | pd_rota / g_rota / modelo_rota                            |
+| 5   | hip_vis         | vivienda         | pd_hip_vis / g_hip_vis / modelo_hip_vis                   |
+| 6   | hip_novis       | vivienda         | pd_hip_novis / g_hip_novis / modelo_hip_novis             |
+| 7   | lea_hab_vis     | vivienda         | pd_lea_hab_vis / g_lea_hab_vis / modelo_lea_hab_vis       |
+| 8   | lea_hab_novis   | vivienda         | pd_lea_hab_novis / g_lea_hab_novis / modelo_lea_hab_novis |
+| 9   | comercial       | comercial        | pd_comercial / g_comercial / modelo_comercial             |
+| 10  | micro           | comercial        | pd_micro / g_micro / modelo_micro                         |
+| 11  | sobregiro       | comercial        | pd_sobre / g_sobre / modelo_sobre                         |
+| 12  | sufi_veh        | sufi             | pd_sufi_veh / g_sufi_veh / modelo_sufi_veh                |
+| 13  | sufi_moto       | sufi             | pd_sufi_moto / g_sufi_moto / modelo_sufi_moto             |
+| 14  | sufi_cpe        | sufi             | pd_sufi_cpe / g_sufi_cpe / modelo_sufi_cpe                |
+| 15  | sufi_con        | sufi             | pd_sufi_con / g_sufi_con / modelo_sufi_con                |
+| 16  | calm            | consumo          | pd_calm / g_calm / modelo_calm                            |
 
-**La columna `familia` es una suposición a partir de los nombres. Confirmar
-antes de usarla en el tablero.**
+**Los valores de `familia_producto` son una propuesta a partir de los nombres
+de producto. Confirmar contra la clasificación que use el banco.** El nombre
+de la columna se eligió para que no se confunda con `producto`, que es el
+detalle individual.
+
+Las dos columnas conviven y forman una jerarquía en el tablero:
+`familia_producto` (4 valores) arriba, `producto` (16 valores) abajo. Un mismo
+visual arranca con cuatro barras y hace drill down al detalle, sin duplicar
+páginas.
 
 ## Decisiones ya tomadas
 
@@ -186,6 +201,8 @@ El perfilado va primero porque su resultado cambia el resto del código.
    Afecta a todos los porcentajes del tablero.
 5. **¿Las PD están en la misma escala entre productos?** Si unas van de 0 a 1 y
    otras de 0 a 100, los bins del histograma y el cálculo de PSI se rompen.
+6. **Confirmar los valores de `familia_producto`** con la clasificación oficial
+   de productos del banco.
 
 ## Distinción pendiente en la matriz de migración
 
@@ -193,18 +210,19 @@ Un cliente puede tener grupo en un producto en un mes y nulo al siguiente sin
 haberse ido del banco: dejó de calificar para ese producto. Son dos fenómenos
 distintos que hay que separar en la matriz:
 
-- **Pérdida de elegibilidad**: el cliente está en `calificaciones` ese mes,
-  pero sin grupo en ese producto. Es una decisión del modelo.
-- **Salida**: el cliente no está en `calificaciones` ese mes. Es un cambio de
+- **Pérdida de elegibilidad**: el cliente está en la tabla ese mes, pero sin
+  grupo en ese producto. Es una decisión del modelo.
+- **Salida**: el cliente no está en la tabla ese mes. Es un cambio de
   población.
 
 Requiere cruzar contra la base de clientes del mes, no solo contra la larga.
 
 ## Visuales que alimenta el tablero
 
-Composición: distribución G1–G8 por producto (barra apilada 100%), heatmap
-segmento × grupo, cobertura por producto, histograma de PD por modelo,
-distribución de cuántos productos son ofertables por cliente.
+Composición: distribución G1–G8 por producto (barra apilada 100%, con drill
+desde `familia_producto`), heatmap segmento × grupo, cobertura por producto,
+histograma de PD por modelo, distribución de cuántos productos son ofertables
+por cliente.
 
 Evolución: mezcla de riesgo en el tiempo (área apilada), PD promedio ponderada
 por producto, PSI por modelo con umbrales en 0.1 y 0.25, vigencia de modelos
@@ -229,8 +247,10 @@ powerbi/
 
 ## Notas de modelado en Power BI
 
-- Esquema estrella: dimensión producto, dimensión modelo, dimensión fecha, más
-  las tablas de agregados como hechos.
+- Esquema estrella: dimensión producto (con `producto` y `familia_producto`),
+  dimensión modelo, dimensión fecha, más las tablas de agregados como hechos.
+- Jerarquía `familia_producto` → `producto` en la dimensión de producto, para
+  que los visuales soporten drill down.
 - La consulta nativa (`Value.NativeQuery`) pide aprobación cada vez que cambia
   el texto por parámetros. Se resuelve en Opciones → Seguridad, o desde la
   configuración del origen de datos.
