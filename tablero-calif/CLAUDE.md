@@ -13,7 +13,8 @@ productos.
   `sobregiro` aplican a quienes tienen pequeño negocio, así que su cobertura
   es estructuralmente baja frente a consumo o tarjeta. **Eso es lo esperado, no
   una falla del pipeline** — importante al leer el visual de cobertura.
-- ~15 MM de clientes por fecha de análisis.
+- Entre 15 y 17 MM de clientes por fecha de análisis, y **bajando**: ver
+  "Ventana de datos y contracción de la base".
 - 16 productos, cada uno con su probabilidad de default (`pd`), su grupo de
   riesgo (`g`) y el modelo que produjo esa PD. El grupo va de G1 a G8, salvo
   en `sufi_moto`, `sufi_cpe` y `sufi_con`, donde G7 y G8 vienen abiertos en
@@ -23,6 +24,30 @@ productos.
 - Llave de cliente: `num_doc` + `tipo_doc`.
 - Partición: `ingestion_year` + `ingestion_month`. La calificación es mensual,
   así que "mes anterior" siempre es el mes calendario inmediatamente previo.
+
+## Ventana de datos y contracción de la base
+
+Verificado 2026-08-25.
+
+**La tabla arranca en 2025-05 y llega hasta 2026-08: 16 meses.** Un solo
+`ingestion_day` por mes en los 16, sin duplicados. Cualquier `{DESDE}` menor
+a `2025 * 12 + 5 = 24305` no falla, simplemente no devuelve nada.
+
+**La base viene bajando sostenidamente: 16,6 MM en 2025-05 a 15,2 MM en
+2026-08, un -9% en 16 meses.** No es un salto puntual ni un problema de
+ingestión; es tendencia.
+
+Esto tiene una consecuencia directa sobre los visuales:
+
+- **Los visuales de composición van en porcentaje, no en conteo absoluto.**
+  Si se apilan conteos, la contracción de la base se lee como si el riesgo
+  estuviera mejorando: menos clientes en G6 no significa menos deterioro
+  cuando hay 1,4 MM de clientes menos en total.
+- **El conteo absoluto va en su propio visual**, junto a la evolución de la
+  base (`base_clientes.sql`), para que la caída se vea como lo que es.
+- Lo mismo aplica al leer la matriz de migración: una masa de salidas
+  creciente mes a mes es consistente con esta contracción, no necesariamente
+  con un cambio de comportamiento de los modelos.
 
 ## Restricciones del entorno — no negociables
 
@@ -222,9 +247,22 @@ alfabética que numéricamente.
   larga `COUNT(*)` cuenta pares cliente-producto, no clientes.
 - **La cobertura se calcula sobre la tabla ancha**, porque el filtro de nulos
   la borra de la larga.
-- **Migración**: `full outer join` contra el mes anterior, con categorías
+- **Migración**: `full outer join` contra el mes de referencia, con categorías
   explícitas de entrada y salida, para que la matriz reconcilie contra la base
   del mes.
+- **La migración se parametriza con `{REZAGO}`, no está fija en un mes.** El
+  join va contra `idx_mes - {REZAGO}`: rezago 1 da la migración mensual,
+  rezago 6 la semestral. Son análisis distintos y **NO encadenables** — las
+  matrices mensuales no se suman para obtener la semestral, porque un cliente
+  que va G3 → G4 → G3 aporta dos movimientos en las mensuales y cero en la
+  semestral. La mensual mide rotación; la semestral, desplazamiento neto.
+  En Power Query son dos consultas del mismo archivo con distinto rezago fijo.
+- **Los primeros `{REZAGO}` meses no tienen comparación, y eso no es un dato
+  faltante.** Con la tabla arrancando en 2025-05, la primera matriz semestral
+  válida es la de **2025-11**; la mensual arranca en 2025-06. Si se deja
+  `{DESDE}` en el primer mes disponible, esos meses salen con todo
+  clasificado como `entrada`, que es un artefacto del borde de la ventana.
+  Regla: `{DESDE} >= 24305 + {REZAGO}`.
 - **Filtro de nulos estándar: `grupo IS NOT NULL`, no `pd IS NOT NULL`.**
   Verificado 2026-08-25: un producto tiene 726 casos con `pd` nula y `grupo`
   poblado; en el resto de los casos ambas coinciden. `grupo` es lo que manda.
@@ -236,7 +274,9 @@ alfabética que numéricamente.
   2026-08-25: un mes puntual llegó con dos ingestiones totales (reproceso
   controlado, una de ellas un ensayo). Fue un **caso único, ya corregido a
   mano** borrando la ingestión del ensayo de ese mes, y no se va a repetir.
-  El código asume una fila por cliente + mes y no lleva `row_number()`.
+  La verificación posterior sobre los 16 meses de la ventana confirma un solo
+  `ingestion_day` por mes, sin duplicados. El código asume una fila por
+  cliente + mes y no lleva `row_number()`.
 - **`pd` no es comparable entre modelos.** Verificado 2026-08-25: el modelo
   "advanced" devuelve el puntaje crudo en `pd` (escala 0 a 999), mientras el
   resto usa 0 a 1. La traducción a `grupo`/`grupo_base` sí llega normalizada a
@@ -248,11 +288,13 @@ alfabética que numéricamente.
 El perfilado va primero porque su resultado cambia el resto del código.
 
 1. **¿Hay más de un `ingestion_day` por mes?**
-   **Resuelto 2026-08-25: sí, un mes** (reproceso controlado, dos ingestiones
-   totales, una de ellas un ensayo). **Sin cambio de código**: fue un caso
-   único, ya corregido a mano borrando la ingestión del ensayo de ese mes, y
-   no se va a repetir. El fragmento canónico no lleva `row_number()`. Ver
-   "Decisiones ya tomadas".
+   **Resuelto 2026-08-25: no, un solo `ingestion_day` por mes en los 16
+   meses de la ventana.** El reproceso controlado que había aparecido antes
+   (dos ingestiones totales, una de ellas un ensayo) fue un caso único, ya
+   corregido a mano borrando la ingestión del ensayo, y la verificación
+   posterior sobre los 16 meses no encontró duplicados. **Sin cambio de
+   código**: el fragmento canónico no lleva `row_number()`. Ver "Decisiones
+   ya tomadas".
 2. **¿`pd` nulo y `g` nulo coinciden siempre?**
    **Resuelto 2026-08-25: no del todo.** Un producto tiene 726 casos con `pd`
    nula y `grupo` poblado; el resto coincide. El filtro base pasa a ser
@@ -317,11 +359,24 @@ dispersión).
 ```
 sql/
   00_perfilado/      resuelve los pendientes de arriba; va primero
+    duplicados_ingestion_day.sql    una ingestión por mes (pendiente 1)
+    nulos_pd_vs_grupo.sql           pd vs grupo, nulos-cadena (2 y 3)
+    dominio_grupos_y_escala_pd.sql  dominio de grupo, escala de pd (4 y 5)
+    validacion_mapeo.sql            cuadra los 16 count(g_*) contra `largo`
   10_agregados/      lo que consume Power BI
+    base_clientes.sql       clientes por mes y segmento (tabla ancha)
+    cobertura_producto.sql  16 count(g_*), salida ancha, despivota en M
+    distribucion_grupo.sql  composición por grupo; grano con `grupo`
+    migracion.sql           matriz sobre grupo_base, con {REZAGO}
+    pd_por_modelo.sql       histograma y PSI, bins fijos por modelo
   _fragmentos/       cte_productos.sql — copia canónica del mapeo
 powerbi/
   notas_modelo.md    esquema estrella, parámetros M, relaciones
 ```
+
+`validacion_mapeo.sql` es la única defensa contra un `CASE` desalineado, que
+no produce error visible. Correrla después de tocar el mapeo, y sobre un mes
+cualquiera antes de dar por buena una carga.
 
 ## Notas de modelado en Power BI
 
