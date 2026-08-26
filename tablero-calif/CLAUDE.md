@@ -15,7 +15,10 @@ productos.
   una falla del pipeline** — importante al leer el visual de cobertura.
 - ~15 MM de clientes por fecha de análisis.
 - 16 productos, cada uno con su probabilidad de default (`pd`), su grupo de
-  riesgo (`g`, de G1 a G8) y el modelo que produjo esa PD.
+  riesgo (`g`) y el modelo que produjo esa PD. El grupo va de G1 a G8, salvo
+  en `sufi_moto`, `sufi_cpe` y `sufi_con`, donde G7 y G8 vienen abiertos en
+  bajo/medio/alto (`G7_B`, `G7_M`, `G7_A` y equivalentes en G8). Ver "Mapeo
+  idx → producto".
 - Un cliente aparece en varias fechas: se recalifica mensualmente.
 - Llave de cliente: `num_doc` + `tipo_doc`.
 - Partición: `ingestion_year` + `ingestion_month`. La calificación es mensual,
@@ -162,6 +165,46 @@ Las dos columnas conviven y forman una jerarquía en el tablero:
 visual arranca con cuatro barras y hace drill down al detalle, sin duplicar
 páginas.
 
+### Apertura de G7 y G8 en los productos sufi
+
+**Verificado 2026-08-25 — `sufi_moto`, `sufi_cpe` y `sufi_con` abren G7 y G8.**
+En vez de un valor plano `G7`/`G8`, estos tres productos (no `sufi_veh`)
+devuelven `G7_B`, `G7_M`, `G7_A` y los equivalentes `G8_*`, con severidad
+ascendente: **B (bajo, mejor) < M (medio) < A (alto, peor)**. Los demás
+productos usan G1-G8 planos.
+
+El fragmento canónico expone tres columnas para lo mismo:
+
+| columna       | qué es                                   | dónde se usa                                 |
+|---------------|------------------------------------------|----------------------------------------------|
+| `grupo`       | valor crudo, con apertura donde exista    | composición, heatmap segmento × grupo        |
+| `grupo_base`  | apertura colapsada a G7/G8 planos         | migración 8×8, comparaciones cross-producto  |
+| `grupo_orden` | entero de severidad ascendente            | orden de `grupo` en Power BI                 |
+
+**`grupo_orden` no es opcional.** Power BI ordena las categorías de texto
+alfabéticamente, y sobre `grupo` eso daría `G7_A, G7_B, G7_M`: el peor grupo
+primero y el intermedio al final. Rompe el apilado de las barras de
+composición y, peor, desalinea el eje de la matriz de migración — la diagonal
+deja de significar estabilidad y el deterioro neto (masa bajo la diagonal
+menos masa sobre ella) sale mal calculado.
+
+La escala es decena = dígito del grupo, unidad = apertura, de modo que los
+grupos planos y los abiertos ordenan entre sí sin tratamiento aparte:
+
+```
+G1 -> 10   G2 -> 20   ...   G6 -> 60   G7 -> 70   G8 -> 80
+G7_B -> 71   G7_M -> 72   G7_A -> 73
+G8_B -> 81   G8_M -> 82   G8_A -> 83
+```
+
+Así `G1` (10) es el menor y `G8_A` (83) el mayor, y `G6` (60) < `G7_B` (71) <
+`G8_A` (83) aunque vengan de productos distintos. Se calcula por aritmética
+sobre el texto de `grupo`, no con un cuarto bloque de mapeo — ver la razón en
+`sql/_fragmentos/cte_productos.sql`.
+
+`grupo_base` no necesita columna de orden: `G1`…`G8` ya ordenan igual
+alfabética que numéricamente.
+
 ## Decisiones ya tomadas
 
 - **La tabla larga no se materializa.** El unpivot es un CTE dentro de cada
@@ -182,27 +225,57 @@ páginas.
 - **Migración**: `full outer join` contra el mes anterior, con categorías
   explícitas de entrada y salida, para que la matriz reconcilie contra la base
   del mes.
+- **Filtro de nulos estándar: `grupo IS NOT NULL`, no `pd IS NOT NULL`.**
+  Verificado 2026-08-25: un producto tiene 726 casos con `pd` nula y `grupo`
+  poblado; en el resto de los casos ambas coinciden. `grupo` es lo que manda.
+- **Los nulos NO vienen como cadena.** Verificado 2026-08-25: `'NA'`, `''` y
+  `'SIN CALIFICACION'` dieron 0 casos en todos los productos
+  (`g_*` y `modelo_*`). `IS NULL` alcanza; no hace falta un `CASE` adicional
+  para atrapar nulos disfrazados.
+- **La deduplicación por `ingestion_day` NO se hace en SQL.** Verificado
+  2026-08-25: un mes puntual llegó con dos ingestiones totales (reproceso
+  controlado, una de ellas un ensayo). Fue un **caso único, ya corregido a
+  mano** borrando la ingestión del ensayo de ese mes, y no se va a repetir.
+  El código asume una fila por cliente + mes y no lleva `row_number()`.
+- **`pd` no es comparable entre modelos.** Verificado 2026-08-25: el modelo
+  "advanced" devuelve el puntaje crudo en `pd` (escala 0 a 999), mientras el
+  resto usa 0 a 1. La traducción a `grupo`/`grupo_base` sí llega normalizada a
+  G1-G8 vía tablas traductoras externas. Cualquier histograma o cálculo de PSI
+  sobre `pd` debe segmentar por `modelo`, no asumir una escala [0,1] uniforme.
 
 ## Pendientes por resolver — en este orden
 
 El perfilado va primero porque su resultado cambia el resto del código.
 
-1. **¿Hay más de un `ingestion_day` por mes?** Si sí, hay que deduplicar con
-   `row_number()` quedándose con el último día, antes del cross join. Si no,
-   esa window sobre 15 MM de filas se omite.
-2. **¿`pd` nulo y `g` nulo coinciden siempre?** Si hay filas con PD nula y
-   grupo poblado (o al revés), el criterio de filtro cambia a
-   `grupo IS NOT NULL`, que es lo que manda para el tablero.
-3. **¿Los nulos vienen como cadena?** En columnas `string` como `g_*` y
-   `modelo_*` es frecuente encontrar `'NA'`, `''`, `'SIN CALIFICACION'`.
-   `IS NULL` no los atrapa.
-4. **¿El dominio de los grupos es exactamente G1–G8?** Cualquier valor fuera de
-   ese rango necesita una decisión explícita: categoría propia o descarte.
-   Afecta a todos los porcentajes del tablero.
-5. **¿Las PD están en la misma escala entre productos?** Si unas van de 0 a 1 y
-   otras de 0 a 100, los bins del histograma y el cálculo de PSI se rompen.
+1. **¿Hay más de un `ingestion_day` por mes?**
+   **Resuelto 2026-08-25: sí, un mes** (reproceso controlado, dos ingestiones
+   totales, una de ellas un ensayo). **Sin cambio de código**: fue un caso
+   único, ya corregido a mano borrando la ingestión del ensayo de ese mes, y
+   no se va a repetir. El fragmento canónico no lleva `row_number()`. Ver
+   "Decisiones ya tomadas".
+2. **¿`pd` nulo y `g` nulo coinciden siempre?**
+   **Resuelto 2026-08-25: no del todo.** Un producto tiene 726 casos con `pd`
+   nula y `grupo` poblado; el resto coincide. El filtro base pasa a ser
+   `grupo IS NOT NULL`. Ver "Decisiones ya tomadas".
+3. **¿Los nulos vienen como cadena?**
+   **Resuelto 2026-08-25: no, 0 casos en todos los productos** para `'NA'`,
+   `''` y `'SIN CALIFICACION'` en `g_*` y `modelo_*`. `IS NULL` alcanza. Ver
+   "Decisiones ya tomadas".
+4. **¿El dominio de los grupos es exactamente G1–G8?**
+   **Resuelto 2026-08-25: no exactamente.** `sufi_moto`, `sufi_cpe` y
+   `sufi_con` abren G7 y G8 en `G7_B/G7_M/G7_A` y `G8_B/G8_M/G8_A` (severidad
+   ascendente B < M < A); los demás productos sí son G1-G8 planos. Resuelto
+   con las columnas `grupo_base` y `grupo_orden` en el fragmento canónico.
+   Ver "Apertura de G7 y G8 en los productos sufi".
+5. **¿Las PD están en la misma escala entre productos?**
+   **Resuelto 2026-08-25: no, y el eje no es el producto sino el modelo.** El
+   modelo "advanced" devuelve `pd` en escala 0-999; el resto en 0-1. Cualquier
+   histograma o PSI sobre `pd` debe segmentar por `modelo`. Ver "Decisiones ya
+   tomadas".
 6. **Confirmar los valores de `familia_producto`** con la clasificación oficial
-   de productos del banco.
+   de productos del banco. Sigue abierto — se confirma más adelante. Por
+   ahora se sigue usando la propuesta de la tabla "Mapeo idx → producto" tal
+   cual, sin bloquear el resto del trabajo.
 
 ## Distinción pendiente en la matriz de migración
 
@@ -219,20 +292,25 @@ Requiere cruzar contra la base de clientes del mes, no solo contra la larga.
 
 ## Visuales que alimenta el tablero
 
-Composición: distribución G1–G8 por producto (barra apilada 100%, con drill
-desde `familia_producto`), heatmap segmento × grupo, cobertura por producto,
-histograma de PD por modelo, distribución de cuántos productos son ofertables
-por cliente.
+Composición: distribución de `grupo` por producto (barra apilada 100%, con
+drill desde `familia_producto`; en `sufi_moto`/`sufi_cpe`/`sufi_con` esto
+muestra la apertura G7_B/M/A y G8_B/M/A, no solo G1-G8, y el apilado se ordena
+por `grupo_orden`), heatmap segmento × grupo, cobertura por producto,
+histograma de PD por modelo (nunca mezclando modelos de escala distinta),
+distribución de cuántos productos son ofertables por cliente.
 
 Evolución: mezcla de riesgo en el tiempo (área apilada), PD promedio ponderada
 por producto, PSI por modelo con umbrales en 0.1 y 0.25, vigencia de modelos
 (% de población por versión de `modelo_*`).
 
-Migración: matriz 8×8 (más entradas y salidas), estabilidad como traza de la
-matriz, deterioro neto como masa bajo la diagonal menos masa sobre ella.
+Migración: matriz 8×8 sobre `grupo_base` (más entradas y salidas), estabilidad
+como traza de la matriz, deterioro neto como masa bajo la diagonal menos masa
+sobre ella.
 
-Consistencia: heatmap de grupo en un producto contra grupo en otro, perfil
-consolidado por cliente (mejor grupo, peor grupo, dispersión).
+Consistencia: heatmap de `grupo_base` en un producto contra `grupo_base` en
+otro (para que las celdas sean comparables 8×8 incluso entre productos sufi y
+no-sufi), perfil consolidado por cliente (mejor grupo, peor grupo,
+dispersión).
 
 ## Estructura del repo
 
@@ -251,6 +329,14 @@ powerbi/
   dimensión modelo, dimensión fecha, más las tablas de agregados como hechos.
 - Jerarquía `familia_producto` → `producto` en la dimensión de producto, para
   que los visuales soporten drill down.
+- **`grupo` se configura con "Ordenar por columna" contra `grupo_orden`.**
+  (Herramientas de columna → Ordenar por columna → `grupo_orden`.) Sin eso
+  Power BI ordena `grupo` alfabéticamente y los grupos abiertos de sufi
+  quedan `G7_A, G7_B, G7_M`, con el peor grupo primero — ver "Apertura de G7 y
+  G8 en los productos sufi". `grupo_orden` debe quedar oculto en el modelo:
+  es una columna de servicio, no una medida que el usuario deba ver. Cada
+  valor de `grupo` tiene un solo `grupo_orden`, así que la relación 1:1 que
+  exige "Ordenar por columna" se cumple.
 - La consulta nativa (`Value.NativeQuery`) pide aprobación cada vez que cambia
   el texto por parámetros. Se resuelve en Opciones → Seguridad, o desde la
   configuración del origen de datos.

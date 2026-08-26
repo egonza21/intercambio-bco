@@ -2,16 +2,18 @@
 -- Perfilado: ¿coincide pd nulo con grupo nulo? ¿hay nulos representados como
 -- cadena?
 -- ----------------------------------------------------------------------------
--- Pendientes 2 y 3 de CLAUDE.md, sobre la misma tabla larga:
+-- Pendientes 2 y 3 de CLAUDE.md, sobre la misma tabla larga. Ambos
+-- resueltos 2026-08-25:
 --
---   1. Si `pd_nulo_grupo_no_nulo` o `pd_no_nulo_grupo_nulo` salen distintos de
---      cero para algún producto, el criterio de filtro en el resto de las
---      queries cambia de `pd IS NOT NULL` a `grupo IS NOT NULL`, que es lo
---      que manda para el tablero (CLAUDE.md, "Decisiones ya tomadas").
---   2. Si `grupo_cadena_vacia`, `grupo_valor_na`, `modelo_cadena_vacia` o
---      `modelo_valor_na` salen distintos de cero, hay valores tipo 'NA', ''
---      o 'SIN CALIFICACION' que un IS NULL no atrapa y que hay que sumar
---      explícitamente al filtro de nulos.
+--   1. `pd_nulo_grupo_no_nulo` dio 726 casos en un producto; en todo lo demás
+--      pd y grupo coinciden. El criterio de filtro para el resto de las
+--      queries queda en `grupo IS NOT NULL`, no `pd IS NOT NULL`.
+--   2. `grupo_cadena_vacia`, `grupo_valor_na`, `modelo_cadena_vacia` y
+--      `modelo_valor_na` dieron 0 en todos los productos: no hay nulos
+--      disfrazados de cadena, `IS NULL` alcanza.
+--
+-- Se conserva como verificación: si al reejecutarla alguno de esos conteos
+-- deja de ser 0, el filtro de nulos del tablero necesita revisión.
 --
 -- Usa el mismo mapeo idx -> producto de sql/_fragmentos/cte_productos.sql,
 -- copiado aquí porque Impala no soporta includes entre archivos. Cualquier

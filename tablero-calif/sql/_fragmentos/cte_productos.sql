@@ -8,13 +8,57 @@
 --
 -- El acoplamiento peligroso está en los CASE que acompañan a este CTE: el
 -- orden de los WHEN tiene que coincidir con el idx de aquí. Un desalineo no
--- produce error, solo datos mal etiquetados.
+-- produce error, solo datos mal etiquetados. Por eso el unpivot va partido en
+-- dos CTEs: `largo_raw` escribe el mapeo idx -> columna UNA sola vez por cada
+-- una de pd, grupo y modelo, y `largo` deriva de ahí las columnas calculadas.
+-- Impala no permite referenciar un alias del mismo SELECT, y repetir el CASE
+-- para derivar una columna de otra multiplicaría el punto frágil del repo.
+-- Si alguna vez hay que tocar el mapeo: son tres bloques CASE, ni uno más.
 --
 -- producto          = detalle individual, 16 valores.
 -- familia_producto  = agrupación gruesa, 4 valores. Forma jerarquía con
 --                     producto en el tablero (drill down).
 --                     PROPUESTA, pendiente de confirmar con la clasificación
---                     oficial del banco.
+--                     oficial del banco (pendiente 6, abierto).
+--
+-- Hallazgos del perfilado incorporados aquí (verificados 2026-08-25, ver
+-- CLAUDE.md secciones "Decisiones ya tomadas" y "Pendientes por resolver"):
+--
+--   - DEDUPLICACIÓN: no hace falta. Un mes puntual llegó con dos ingestiones
+--     totales (reproceso controlado, una de ellas un ensayo); fue un caso
+--     único, ya corregido a mano borrando la ingestión del ensayo, y no se
+--     va a repetir. El código asume una fila por num_doc + tipo_doc + mes y
+--     no lleva row_number().
+--   - GRUPO_BASE / GRUPO_ORDEN: sufi_moto, sufi_cpe y sufi_con abren G7 y G8
+--     en G7_B/G7_M/G7_A y G8_B/G8_M/G8_A (severidad ascendente: B mejor, M
+--     intermedio, A peor). Los demás productos usan G1-G8 planos. El CTE
+--     expone tres vistas de lo mismo:
+--       grupo        valor crudo, con la apertura donde exista. Es el que
+--                    usa el visual de composición.
+--       grupo_base   la apertura colapsada a G7/G8 planos, para que la
+--                    matriz de migración 8x8 y las comparaciones
+--                    cross-producto usen una escala común de 8 categorías.
+--       grupo_orden  entero de severidad ascendente, para ordenar `grupo`
+--                    en Power BI ("Ordenar por columna"). Sin él Power BI
+--                    ordena alfabéticamente y deja G7_A, G7_B, G7_M: el peor
+--                    grupo primero y el intermedio al final, lo que rompe el
+--                    apilado de las barras y desalinea el eje de la matriz
+--                    de migración (la diagonal deja de ser estabilidad y el
+--                    deterioro neto sale mal calculado).
+--   - PD: el modelo "advanced" devuelve el puntaje crudo en `pd` (0 a 999,
+--     no 0 a 1); la traducción a `grupo`/`grupo_base` sí llega normalizada
+--     a G1-G8 vía tablas traductoras externas al alcance de este fragmento.
+--     `pd` NO es comparable entre productos ni entre modelos dentro del
+--     mismo producto: cualquier histograma o PSI sobre `pd` debe segmentar
+--     por `modelo`, no asumir escala [0,1] uniforme.
+--   - NULOS: el filtro base para "el cliente califica en este producto" es
+--     `grupo IS NOT NULL`, no `pd IS NOT NULL`. Un producto tiene 726 casos
+--     con pd nula y grupo poblado; en el resto de los casos ambas
+--     coinciden. Los nulos-como-cadena ('NA', '', 'SIN CALIFICACION') dieron
+--     0 casos en todos los productos, así que `IS NULL` alcanza, sin CASE
+--     adicional. Ese filtro sigue sin ir en este CTE (va en la query que
+--     consume `largo`), pero el criterio ya está resuelto:
+--     `grupo IS NOT NULL`.
 -- ============================================================================
 
 with productos as (
@@ -37,16 +81,13 @@ with productos as (
 ),
 
 -- ----------------------------------------------------------------------------
--- CTE de unpivot que acompaña al anterior. El filtro de particiones va aquí,
--- antes del cross join, para que Impala pode particiones.
---
--- OJO: el filtro de nulos NO va en este CTE, va en la query que lo consume.
--- La razón es que el criterio correcto (pd IS NOT NULL vs grupo IS NOT NULL)
--- depende del resultado de sql/00_perfilado/nulos_pd_vs_grupo.sql, y la query
--- de cobertura necesita justamente las filas nulas.
+-- Unpivot puro. ÚNICO lugar donde vive el mapeo idx -> columna: un bloque
+-- CASE para pd, uno para grupo, uno para modelo. Nada derivado va aquí.
+-- El filtro de partición va en este CTE, antes del cross join, para que
+-- Impala pode particiones y no lea la tabla completa.
 -- ----------------------------------------------------------------------------
 
-largo as (
+largo_raw as (
   select
     c.num_doc,
     c.tipo_doc,
@@ -88,7 +129,49 @@ largo as (
   from resultados_riesgos.maestro_calificaciones_pn c
   cross join productos p
   where c.ingestion_year * 12 + c.ingestion_month between {DESDE} and {HASTA}
+),
+
+-- ----------------------------------------------------------------------------
+-- Columnas derivadas de `grupo`. Se referencia `largo_raw` una sola vez, así
+-- que el hecho de que Impala no materialice los CTEs no cuesta nada aquí.
+--
+-- grupo_orden: decena = dígito del grupo, unidad = apertura.
+--   G1 -> 10 ... G6 -> 60 ... G8 -> 80
+--   G7_B -> 71   G7_M -> 72   G7_A -> 73
+--   G8_B -> 81   G8_M -> 82   G8_A -> 83
+-- Los planos caen en la misma escala (unidad 0), así que ordenan contra los
+-- abiertos sin tratamiento aparte: G6 (60) < G7_B (71) < G8_A (83). El
+-- cálculo es aritmético a propósito, no un CASE con los 20 valores: un
+-- cuarto bloque de mapeo sería justo lo que este archivo trata de evitar.
+-- Si `grupo` viniera con un formato inesperado el CAST da NULL y la fila
+-- queda sin orden, visible en el tablero en vez de ordenada en silencio.
+--
+-- OJO: el filtro de nulos NO va en este CTE, va en la query que lo consume,
+-- y el criterio es `grupo IS NOT NULL` (ver hallazgo NULOS arriba).
+-- ----------------------------------------------------------------------------
+
+largo as (
+  select
+    r.num_doc,
+    r.tipo_doc,
+    r.ingestion_year,
+    r.ingestion_month,
+    r.segmento,
+    r.producto,
+    r.familia_producto,
+    r.pd,
+    r.grupo,
+    regexp_replace(r.grupo, '_[BMA]$', '') as grupo_base,
+    cast(substr(r.grupo, 2, 1) as int) * 10
+      + case substr(r.grupo, 4, 1)
+          when 'B' then 1
+          when 'M' then 2
+          when 'A' then 3
+          else 0
+        end as grupo_orden,
+    r.modelo
+  from largo_raw r
 )
 
--- Uso: continuar con el SELECT final que consume `largo`, aplicando el filtro
--- de nulos que corresponda.
+-- Uso: continuar con el SELECT final que consume `largo`, aplicando
+-- `grupo IS NOT NULL` como filtro de nulos.

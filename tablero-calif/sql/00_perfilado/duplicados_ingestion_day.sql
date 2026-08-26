@@ -4,14 +4,13 @@
 -- Pendiente 1 de CLAUDE.md. Opera directamente sobre la tabla ancha, sin
 -- unpivot: la pregunta es sobre la partición, no sobre los productos.
 --
--- Lectura del resultado:
---   - Si `dias_distintos` es 1 para todos los meses, la partición ya trae un
---     solo ingestion_day por mes y la deduplicación con row_number() se omite
---     en el resto de las queries.
---   - Si `dias_distintos` > 1 para algún mes, hay que deduplicar por
---     num_doc + tipo_doc quedándose con el último ingestion_day (el de
---     `ultimo_dia`) antes del cross join contra productos en
---     sql/_fragmentos/cte_productos.sql.
+-- Resuelto 2026-08-25: sí hubo un mes con `dias_distintos` > 1 (reproceso
+-- controlado, un ensayo). Fue un caso único, ya corregido a mano borrando la
+-- ingestión del ensayo de ese mes, y no se va a repetir. Por eso
+-- sql/_fragmentos/cte_productos.sql NO deduplica con row_number(): asume una
+-- sola fila por num_doc + tipo_doc + mes. Esta query se conserva como
+-- verificación puntual, por si hace falta reconfirmar el estado de la
+-- partición antes de correr los agregados.
 --
 -- Parámetros:
 --   {DESDE}, {HASTA} -- rango de meses, en ingestion_year*12+ingestion_month

@@ -20,11 +20,17 @@
 -- ----------------------------------------------------------------------------
 -- 1. Dominio de `grupo` (pendiente 4)
 -- ----------------------------------------------------------------------------
--- Lista cada valor de grupo que aparece por producto, con su conteo. El
--- dominio esperado es G1-G8; cualquier otro valor no nulo (fuera de rango,
--- o los residuos de nulos-como-cadena que resuelve
--- sql/00_perfilado/nulos_pd_vs_grupo.sql) necesita una decisión explícita:
--- categoría propia o descarte. Afecta todos los porcentajes del tablero.
+-- Lista cada valor de grupo que aparece por producto, con su conteo.
+--
+-- Resuelto 2026-08-25: el dominio NO es G1-G8 plano en todos los productos.
+-- sufi_moto, sufi_cpe y sufi_con abren G7 y G8 en G7_B/G7_M/G7_A y
+-- G8_B/G8_M/G8_A (severidad ascendente B < M < A); los demás productos sí
+-- usan G1-G8 planos. Resuelto en sql/_fragmentos/cte_productos.sql con las
+-- columnas grupo_base (apertura colapsada) y grupo_orden (severidad
+-- numérica). Esta query se conserva como verificación: si aparece un valor
+-- fuera de {G1..G8} y de las seis aperturas conocidas, hay que decidir
+-- explícitamente qué hacer con él y revisar grupo_orden, porque su cálculo
+-- aritmético asume ese formato.
 -- ----------------------------------------------------------------------------
 
 with productos as (
@@ -76,11 +82,20 @@ order by l.producto, l.grupo;
 -- ----------------------------------------------------------------------------
 -- 2. Escala de `pd` por producto (pendiente 5)
 -- ----------------------------------------------------------------------------
--- Min, máximo y promedio de pd por producto. Si todos los productos quedan
--- entre 0 y 1, la escala es consistente. Si algún producto muestra máximos
--- cercanos a 100 (o mínimos negativos, u otro rango que no sea [0,1]), los
--- bins del histograma de PD y el cálculo de PSI necesitan normalizar esa
--- columna antes de compararla con las demás.
+-- Min, máximo y promedio de pd por producto.
+--
+-- Resuelto 2026-08-25: la escala NO es uniforme, y el eje que la determina
+-- no es el producto sino el modelo. El modelo "advanced" deja en `pd` el
+-- puntaje crudo (0 a 999) en vez de una probabilidad [0,1]; su traducción a
+-- grupo sí llega normalizada a G1-G8 vía traductores. Por eso el histograma
+-- de PD y el PSI deben segmentar por `modelo`, nunca mezclar modelos de
+-- escala distinta en un mismo eje.
+--
+-- Para ver qué modelo trae qué escala hace falta agrupar por modelo, no solo
+-- por producto: un mismo producto puede traer varias versiones de modelo. Si
+-- se necesita ese corte, agregar `l.modelo` al select y al group by (implica
+-- llevar el CASE de modelo al CTE, hoy omitido porque este bloque solo mira
+-- pd).
 -- ----------------------------------------------------------------------------
 
 with productos as (
