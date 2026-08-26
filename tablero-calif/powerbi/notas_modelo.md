@@ -4,6 +4,53 @@ Complementa la sección "Notas de modelado en Power BI" de `CLAUDE.md`. Aquí va
 el detalle de cómo se arman las dimensiones, cómo se declaran los parámetros y
 qué queda del lado de Power Query en vez del SQL.
 
+## Dos audiencias, dos bloques de páginas
+
+**El tablero atiende a dos públicos y se separan por página. No se mezclan en
+un mismo lienzo.** No es una preferencia estética: las dos audiencias leen los
+mismos datos con preguntas distintas, y un visual puesto en la página
+equivocada se malinterpreta de forma predecible.
+
+| | **Páginas funcionales** | **Páginas de modelos** |
+|---|---|---|
+| Audiencia | equipo comercial / negocio | seguimiento técnico |
+| Pregunta | cómo se reparte la cartera | cómo se comporta el modelo |
+| Unidad | el **grupo** (G1–G8) | la **PD** |
+| Dimensiones | producto, segmento, familia | serie_pd, modelo |
+| Contenido | composición por producto y segmento, cobertura, migración de grupo, evolución mensual | PSI de las dos PD, vigencia de modelos, migración de PD por deciles, sensibilidad de cortes |
+
+### Qué consulta alimenta qué
+
+| consulta | bloque | notas |
+|---|---|---|
+| `base_clientes` | funcional | denominador y evolución de la base |
+| `cobertura_producto` | funcional | despivotar en Power Query |
+| `distribucion_grupo` | funcional | ya no trae PD |
+| `migracion_mensual` / `migracion_semestral` | funcional | matriz de grupo |
+| `pd_por_modelo` | modelos | PSI e histograma |
+| `migracion_pd_mensual` / `migracion_pd_semestral` | modelos | matriz de deciles |
+| `cortes_por_producto` | modelos | sensibilidad de cortes |
+
+### Por qué no se mezclan
+
+- **`producto` no es una dimensión válida para la PD.** Solo hay dos PD (ver
+  `CLAUDE.md`, "La PD no es por producto"), así que un visual de PD con
+  producto en el eje muestra 12 copias del mismo histograma. En las páginas
+  funcionales producto está en todos los ejes; llevar un visual de PD ahí es
+  la forma más fácil de construir ese error.
+- **La PD y el grupo se mueven por razones distintas.** Un cliente puede
+  cambiar de grupo sin que su PD se mueva, si cambian los cortes del producto.
+  Poner las dos migraciones juntas invita a leer una como explicación de la
+  otra.
+- **Las dos matrices se leen distinto.** La de grupo usa bandas fijas
+  (`grupo_base`); la de PD usa deciles por período, que son ranking. Una
+  diagonal fuerte significa cosas distintas en cada una.
+- **El negocio no necesita el PSI y el equipo técnico no necesita la
+  cobertura por segmento.** Mezclarlos hace que cada audiencia filtre visuales
+  que no le sirven.
+
+Lo único que comparten es el slicer de fecha y `dim_fecha`.
+
 ## Reparto de responsabilidades: SQL vs. Power Query
 
 Los agregados de `sql/10_agregados/` son **hechos**: traen las llaves del
@@ -168,14 +215,20 @@ El reparto que quedó:
 
 ## Consultas y su forma en Power Query
 
-| consulta            | origen                    | forma                                  |
-|---------------------|---------------------------|----------------------------------------|
-| `base_clientes`     | base_clientes.sql         | directa                                |
-| `cobertura_producto`| cobertura_producto.sql    | **despivotar** las 16 columnas `cob_*` |
-| `distribucion_grupo`| distribucion_grupo.sql    | directa                                |
-| `migracion_mensual` | migracion.sql, rezago 1   | directa                                |
-| `migracion_semestral`| migracion.sql, rezago 6  | directa                                |
-| `pd_por_modelo`     | pd_por_modelo.sql         | directa                                |
+| consulta                  | origen                      | forma                                  |
+|---------------------------|-----------------------------|----------------------------------------|
+| `base_clientes`           | base_clientes.sql           | directa                                |
+| `cobertura_producto`      | cobertura_producto.sql      | **despivotar** las 16 columnas `cob_*` |
+| `distribucion_grupo`      | distribucion_grupo.sql      | directa                                |
+| `migracion_mensual`       | migracion.sql, rezago 1     | directa                                |
+| `migracion_semestral`     | migracion.sql, rezago 6     | directa                                |
+| `pd_por_modelo`           | pd_por_modelo.sql           | directa                                |
+| `migracion_pd_mensual`    | migracion_pd.sql, rezago 1  | directa                                |
+| `migracion_pd_semestral`  | migracion_pd.sql, rezago 6  | directa                                |
+| `cortes_por_producto`     | cortes_por_producto.sql     | directa                                |
+
+Son **cuatro** consultas con `{REZAGO}` fijo: dos de migración de grupo y dos
+de migración de PD. Las cuatro son tablas de hechos separadas.
 
 ### cobertura_producto: despivotar
 
@@ -208,15 +261,13 @@ resto del refresco: es la consulta más cara del repo.
 
 ### Sobre `distribucion_grupo`
 
-Trae `clientes`, `clientes_con_pd`, `pd_suma`, `pd_min` y `pd_max`. Dos
-trampas:
+Trae una sola métrica: `clientes`. **Ya no trae PD** — ver `CLAUDE.md`, "La PD
+no es por producto": llevar `pd_suma` con `producto` en el grano hacía que
+sumar sobre productos contara la misma PD hasta 12 veces.
 
-- **PD promedio ponderada = `SUM(pd_suma) / SUM(clientes_con_pd)`**, no
-  `/ SUM(clientes)`. Hay un producto con 726 filas de PD nula y grupo
-  poblado: cuentan en `clientes` pero no aportan a `pd_suma`.
-- **Nunca sumar `pd_suma` entre modelos de escala distinta.** Como `modelo`
-  está en el grano cada fila es consistente, pero un visual que agregue sobre
-  varios modelos mezcla 0–999 con 0–1. Filtrar por modelo o por `escala`.
+La trampa que queda: **sumar `clientes` entre productos da pares
+cliente-producto, no clientes.** Un cliente con grupo en 5 productos aporta 5.
+Para contar clientes hay que fijar un producto, o usar `base_clientes`.
 
 ### Composición: siempre en porcentaje
 
@@ -244,3 +295,43 @@ para puntaje) y los bordes no dependen del período — condición necesaria par
 que el PSI signifique algo. Cuidar `DIVIDE` para los bins vacíos: un bin con
 `p_base` = 0 da división por cero, y lo habitual es excluirlo o sustituirlo
 por un épsilon.
+
+El grano es `serie_pd` + `modelo`, **sin producto**: solo hay dos PD, así que
+un PSI "por producto" serían 12 copias del mismo número.
+
+### Migración de PD: no confundirla con el PSI
+
+`migracion_pd` usa **deciles por período** (`ntile(10)` dentro de cada
+serie × modelo × mes), no bandas fijas. Cada decil tiene el 10% de su mes por
+construcción.
+
+Es lo correcto para esa matriz y sería un error en el PSI:
+
+- La matriz de deciles pregunta por **reordenamiento**: quién estaba en el
+  decil más riesgoso y dónde está ahora. La diagonal es estabilidad del
+  ranking.
+- El PSI pregunta por **desplazamiento de la distribución**, y con bins por
+  período daría siempre ~0.
+
+**Una diagonal fuerte en la matriz de deciles NO dice que la distribución no
+se movió.** Puede desplazarse entera y mantener el orden intacto. Para eso
+está el PSI, que es un visual distinto en la misma página.
+
+### Sensibilidad de cortes: `cortes_por_producto`
+
+Trae `pd_min`, `pd_max`, `clientes` por producto × modelo × grupo, más
+`pd_max_grupo_previo` y `solapa`.
+
+La frontera de corte entre dos grupos consecutivos está entre el `pd_max` de
+uno y el `pd_min` del siguiente. Ordenar los grupos por `pd_min` ascendente
+reconstruye la tabla de cortes vigente ese mes.
+
+**`solapa = true` es la señal a vigilar**: significa que dos clientes con la
+misma PD quedaron en grupos distintos, y por lo tanto el corte de ese producto
+**no depende solo de la PD**. Puede ser una regla de negocio legítima, pero
+tiene que ser una decisión conocida. Un indicador de "productos con
+solapamiento este mes" en la página de modelos alcanza para que no pase
+inadvertido.
+
+Es el único visual técnico donde `producto` sí es dimensión válida: los cortes
+sí son por producto, aunque la PD no lo sea.

@@ -3,9 +3,14 @@
 -- ----------------------------------------------------------------------------
 -- Produce una fila por
 --   ingestion_year + ingestion_month + segmento + producto + grupo + modelo
--- con el conteo de clientes y los estadísticos de PD de ese cruce. Alimenta
--- los visuales de composición (barra apilada 100% de grupo por producto),
--- el heatmap segmento x grupo y la PD promedio ponderada.
+-- con el conteo de clientes. Alimenta los visuales de composición (barra
+-- apilada 100% de grupo por producto), el heatmap segmento x grupo y la
+-- vigencia de modelos.
+--
+-- Es un agregado de PÁGINA FUNCIONAL (equipo comercial / negocio): responde
+-- "cómo se reparten los clientes entre grupos", no "cómo se comporta el
+-- modelo". Ver powerbi/notas_modelo.md, "Dos audiencias, dos bloques de
+-- páginas".
 --
 -- Parámetros:
 --   {DESDE}, {HASTA} -- rango de meses, en ingestion_year*12+ingestion_month
@@ -13,6 +18,13 @@
 -- ----------------------------------------------------------------------------
 -- Qué NO lleva, y por qué
 -- ----------------------------------------------------------------------------
+-- - **Nada de `pd`.** Verificado 2026-08-25: la PD se replica idéntica en los
+--   12 productos no-vivienda, y los 4 de vivienda comparten la suya. Solo hay
+--   DOS PD por cliente, no 16. Traer pd_suma / pd_min / pd_max con `producto`
+--   en el grano invitaba a que Power BI sumara la misma PD 12 veces al
+--   agregar sobre productos: un número sin significado que además parecía
+--   correcto. La PD vive ahora en pd_por_modelo.sql y migracion_pd.sql, con
+--   su grano real. Ver CLAUDE.md, "La PD no es por producto".
 -- - `grupo_base` y `grupo_orden`: van en una dim_grupo que se arma aparte en
 --   Power Query (ver powerbi/notas_modelo.md). Este agregado lleva `grupo`
 --   como llave y nada más; las dos derivadas se resuelven en el modelo, no
@@ -39,17 +51,11 @@
 --   que la tabla ancha traiga una sola fila por cliente + mes (ver CLAUDE.md,
 --   "La deduplicación por ingestion_day NO se hace en SQL"). Si esa premisa
 --   se rompiera, este conteo duplica en silencio.
--- - `clientes_con_pd` es `count(l.pd)`, que ignora nulos. NO es redundante
---   con `clientes`: hay un producto con 726 casos de pd nula y grupo
---   poblado, y esas filas entran al agregado (el filtro es por grupo). La
---   PD promedio ponderada es `pd_suma / clientes_con_pd`; dividir por
---   `clientes` da un promedio sesgado hacia abajo en ese producto.
--- - `pd_suma`, `pd_min` y `pd_max` son comparables SOLO dentro de un mismo
---   `modelo`. El modelo "advanced" deja en pd el puntaje crudo (0 a 999) en
---   vez de una probabilidad [0,1]. Como `modelo` está en el grano, cada fila
---   es internamente consistente, pero sumar `pd_suma` entre modelos de
---   escala distinta en Power BI produce un número sin significado. Ver
---   CLAUDE.md, "pd no es comparable entre modelos".
+-- - `clientes` SÍ se puede sumar entre productos, pero lo que da es
+--   pares cliente-producto, no clientes: un cliente con grupo en 5 productos
+--   aporta 5. Para contar clientes hay que fijar un producto, o usar
+--   base_clientes.sql. Es la misma advertencia de siempre, y ahora es la
+--   única métrica del agregado, así que conviene tenerla presente.
 --
 -- Sin ORDER BY a propósito: Power BI importa y ordena en el modelo, y un
 -- sort distribuido sobre el resultado sería trabajo puro de más.
@@ -148,11 +154,7 @@ select
   l.producto,
   l.grupo,
   l.modelo,
-  count(*)       as clientes,
-  count(l.pd)    as clientes_con_pd,
-  sum(l.pd)      as pd_suma,
-  min(l.pd)      as pd_min,
-  max(l.pd)      as pd_max
+  count(*) as clientes
 from largo l
 where l.grupo is not null
 group by

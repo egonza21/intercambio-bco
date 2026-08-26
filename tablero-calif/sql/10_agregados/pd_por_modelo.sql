@@ -1,180 +1,161 @@
 -- ============================================================================
--- Agregado: distribución de PD por modelo (histograma y PSI)
+-- Agregado: distribución de las dos PD, por modelo (histograma y PSI)
 -- ----------------------------------------------------------------------------
 -- Produce una fila por
---   ingestion_year + ingestion_month + producto + modelo + bin
--- con el conteo de clientes y los estadísticos de PD del bin. Alimenta el
--- histograma de PD y el cálculo de PSI por modelo, con umbrales en 0,1 y
--- 0,25.
+--   ingestion_year + ingestion_month + serie_pd + modelo + bin
+-- con el conteo de clientes y los estadísticos del bin. Alimenta el
+-- histograma de PD y el PSI por modelo, con umbrales en 0,1 y 0,25.
+--
+-- Es un agregado de PÁGINA DE MODELOS (seguimiento técnico). Ver
+-- powerbi/notas_modelo.md, "Dos audiencias, dos bloques de páginas".
 --
 -- Parámetros:
 --   {DESDE}, {HASTA} -- rango de meses, en ingestion_year*12+ingestion_month
 --
 -- ----------------------------------------------------------------------------
--- Siempre segmentado por modelo, y por qué eso no es opcional
+-- Solo hay DOS PD, no 16 -- y por eso esta query no despivota por producto
 -- ----------------------------------------------------------------------------
--- El modelo "advanced" deja en `pd` el puntaje crudo, de 0 a 999, en vez de
--- una probabilidad en [0,1]. Mezclar sus filas con las de un modelo de
--- probabilidad en un mismo eje da un histograma sin significado y un PSI
--- inventado. Por eso `modelo` está en el grano y el ancho del bin se decide
--- POR MODELO, no global.
+-- Verificado 2026-08-25: la PD se replica idéntica en los 12 productos
+-- no-vivienda, y los 4 de vivienda comparten la suya. La PD es un atributo
+-- del CLIENTE, no del producto; lo que sí es por producto es el `grupo`, que
+-- sale de traducir esa PD con los cortes de cada producto (ver
+-- cortes_por_producto.sql).
 --
--- La escala se detecta con `max(pd) over (partition by producto, modelo)`:
--- si el máximo del modelo en toda la ventana pasa de 1, es un puntaje
--- 0-999; si no, es una probabilidad. Se hace con función de ventana y no con
--- un segundo agregado para no recorrer el unpivot dos veces. Es un umbral
--- estable -- un modelo entrega puntajes o probabilidades, no ambos -- pero
--- si algún día un modelo de probabilidad tuviera máximo exactamente 1,0 y
--- otro puntaje llegara a 1, esta detección es lo primero a revisar.
+-- Consecuencias directas sobre esta query:
 --
--- NO se normaliza dividiendo por 1000: los bins salen en las unidades
--- originales del modelo. `escala` viaja en la salida para que Power BI pueda
--- separar o excluir explícitamente los modelos que no comparten unidad.
+--   - NO hay cross join contra los 16 productos. Se cruza contra un CTE de
+--     2 series, así que el volumen se duplica en vez de multiplicarse por 16.
+--     Es ~8 veces más barata que la versión anterior y mide lo mismo.
+--   - `producto` NO está en el grano: no significa nada aquí. Un histograma
+--     de PD "de consumo" y uno "de tdc" eran el mismo histograma repetido.
+--   - El grano es `serie_pd` + `modelo`. Dos series:
+--       general   la PD de los 12 productos no-vivienda
+--       vivienda  la PD de hip_vis, hip_novis, lea_hab_vis, lea_hab_novis
+--
+-- Cada serie se toma con COALESCE sobre las columnas de su grupo, no de una
+-- sola columna representativa. Si la replicación es exacta el coalesce es
+-- inocuo; si alguna columna llegara nula donde otra tiene valor, lo recupera
+-- en vez de perder la fila. El costo es nulo y protege contra el único modo
+-- de falla plausible de la premisa.
+--
+-- OJO: si la replicación dejara de cumplirse, esta query no lo detecta -- el
+-- coalesce se queda con la primera no nula y sigue. Vale correr una
+-- comparación columna a columna antes de dar por buena una carga nueva.
 --
 -- ----------------------------------------------------------------------------
--- Bins fijos, que es lo que el PSI exige
+-- El filtro es `pd IS NOT NULL`, NO `grupo IS NOT NULL`
 -- ----------------------------------------------------------------------------
+-- Es la excepción a la regla estándar del repo, y se sigue del hallazgo de
+-- arriba: `grupo IS NOT NULL` responde "el cliente califica en ESTE
+-- producto", que es una pregunta de producto. Aquí la población correcta es
+-- la que el modelo alcanzó a calificar, tenga o no grupo en algún producto.
+-- Filtrar por grupo de un producto cualquiera sesgaría la distribución hacia
+-- la población elegible de ese producto.
+--
+-- ----------------------------------------------------------------------------
+-- Escala y bins fijos, que es lo que el PSI exige
+-- ----------------------------------------------------------------------------
+-- El modelo "advanced" deja en pd el puntaje crudo, de 0 a 999, en vez de una
+-- probabilidad en [0,1]. La escala se detecta con
+-- `max(pd) over (partition by serie_pd, modelo)`: con función de ventana y no
+-- con un segundo agregado, para no recorrer los datos dos veces.
+--
 -- 20 bins de ancho constante por escala: 0,05 para probabilidad (0 a 1) y 50
 -- para puntaje (0 a 1000). Los bordes son FIJOS, no cuantiles del período.
 --
 -- Es deliberado: el PSI compara la distribución de un período contra otro
--- sobre los MISMOS bins. Si los bordes se recalcularan por período (ntile,
--- deciles del mes), cada período quedaría equireparado por construcción y el
--- PSI daría siempre ~0, que es justo el resultado que se quiere detectar
--- cuando no es cierto. Bordes fijos también sobreviven a un cambio de
--- ventana de refresco: los bins de {DESDE}-{HASTA} de hoy son los mismos que
--- los de mañana.
+-- sobre los MISMOS bins. Si los bordes se recalcularan por período, cada
+-- período quedaría equireparado por construcción y el PSI daría siempre ~0,
+-- que es justo el resultado que se quiere detectar cuando no es cierto.
 --
--- `least(..., 19)` agrupa en el último bin cualquier valor en el borde
--- superior o por encima de él, para que ningún cliente quede fuera del
--- histograma.
+-- (Contraste deliberado con migracion_pd.sql, que SÍ usa deciles por período:
+-- ahí la pregunta es de reordenamiento dentro del ranking, no de
+-- desplazamiento de la distribución. Son análisis distintos y no
+-- intercambiables.)
 --
--- El PSI se calcula en DAX sobre este agregado: proporción del bin en el
--- período contra proporción del bin en el período base, sumando
--- (p_act - p_base) * ln(p_act / p_base). Aquí solo van los conteos.
+-- `least(..., 19)` agrupa en el último bin lo que caiga en el borde superior
+-- o por encima, para que ningún cliente quede fuera del histograma.
 --
--- ----------------------------------------------------------------------------
--- Grano: sin segmento, y con filtro por grupo
--- ----------------------------------------------------------------------------
--- `segmento` NO entra en el grano: multiplicaría las filas por cada segmento
--- sin que el PSI por modelo lo necesite. Si hiciera falta un PSI por
--- segmento, se agrega la columna aquí y al group by, asumiendo el costo.
+-- El PSI se calcula en DAX sobre este agregado. Aquí solo van los conteos.
 --
--- El filtro es `grupo IS NOT NULL AND pd IS NOT NULL`. El primero es el
--- criterio estándar de "el cliente califica"; el segundo saca las 726 filas
--- con pd nula y grupo poblado, que no tienen valor que binear. Por eso
--- `clientes` de este agregado NO cuadra contra el de distribucion_grupo.sql:
--- este cuenta los que tienen PD, aquel cuenta los que tienen grupo.
+-- `count(*)` cuenta clientes: el grano de `series_pd` es cliente x mes x
+-- serie, una fila por combinación.
 --
 -- Sin ORDER BY a propósito: Power BI importa y ordena en el modelo.
 -- ============================================================================
 
-with productos as (
-              select 1  as idx, 'consumo' as producto, 'consumo' as familia_producto
-    union all select 2,  'tdc',           'consumo'
-    union all select 3,  'libranza',      'consumo'
-    union all select 4,  'rotativo',      'consumo'
-    union all select 5,  'hip_vis',       'vivienda'
-    union all select 6,  'hip_novis',     'vivienda'
-    union all select 7,  'lea_hab_vis',   'vivienda'
-    union all select 8,  'lea_hab_novis', 'vivienda'
-    union all select 9,  'comercial',     'comercial'
-    union all select 10, 'micro',         'comercial'
-    union all select 11, 'sobregiro',     'comercial'
-    union all select 12, 'sufi_veh',      'sufi'
-    union all select 13, 'sufi_moto',     'sufi'
-    union all select 14, 'sufi_cpe',      'sufi'
-    union all select 15, 'sufi_con',      'sufi'
-    union all select 16, 'calm',          'consumo'
+with series as (
+              select 1 as idx, 'general'  as serie_pd
+    union all select 2,        'vivienda'
 ),
 
-largo_raw as (
+-- ----------------------------------------------------------------------------
+-- Las dos PD del cliente, con su modelo. Una sola pasada de la tabla ancha,
+-- sin unpivot por producto.
+-- ----------------------------------------------------------------------------
+
+pd_cliente as (
   select
     c.num_doc,
     c.tipo_doc,
     c.ingestion_year,
     c.ingestion_month,
-    c.segmento,
-    p.producto,
-    p.familia_producto,
-    case p.idx
-      when  1 then c.pd_consumo        when  2 then c.pd_tdc
-      when  3 then c.pd_libranza       when  4 then c.pd_rota
-      when  5 then c.pd_hip_vis        when  6 then c.pd_hip_novis
-      when  7 then c.pd_lea_hab_vis    when  8 then c.pd_lea_hab_novis
-      when  9 then c.pd_comercial      when 10 then c.pd_micro
-      when 11 then c.pd_sobre          when 12 then c.pd_sufi_veh
-      when 13 then c.pd_sufi_moto      when 14 then c.pd_sufi_cpe
-      when 15 then c.pd_sufi_con       when 16 then c.pd_calm
-    end as pd,
-    case p.idx
-      when  1 then c.g_consumo         when  2 then c.g_tdc
-      when  3 then c.g_libranza        when  4 then c.g_rota
-      when  5 then c.g_hip_vis         when  6 then c.g_hip_novis
-      when  7 then c.g_lea_hab_vis     when  8 then c.g_lea_hab_novis
-      when  9 then c.g_comercial       when 10 then c.g_micro
-      when 11 then c.g_sobre           when 12 then c.g_sufi_veh
-      when 13 then c.g_sufi_moto       when 14 then c.g_sufi_cpe
-      when 15 then c.g_sufi_con        when 16 then c.g_calm
-    end as grupo,
-    case p.idx
-      when  1 then c.modelo_consumo       when  2 then c.modelo_tdc
-      when  3 then c.modelo_libranza      when  4 then c.modelo_rota
-      when  5 then c.modelo_hip_vis       when  6 then c.modelo_hip_novis
-      when  7 then c.modelo_lea_hab_vis   when  8 then c.modelo_lea_hab_novis
-      when  9 then c.modelo_comercial     when 10 then c.modelo_micro
-      when 11 then c.modelo_sobre         when 12 then c.modelo_sufi_veh
-      when 13 then c.modelo_sufi_moto     when 14 then c.modelo_sufi_cpe
-      when 15 then c.modelo_sufi_con      when 16 then c.modelo_calm
-    end as modelo
+    coalesce(c.pd_consumo,   c.pd_tdc,       c.pd_libranza,  c.pd_rota,
+             c.pd_comercial, c.pd_micro,     c.pd_sobre,     c.pd_sufi_veh,
+             c.pd_sufi_moto, c.pd_sufi_cpe,  c.pd_sufi_con,  c.pd_calm)
+      as pd_general,
+    coalesce(c.modelo_consumo,   c.modelo_tdc,      c.modelo_libranza,
+             c.modelo_rota,      c.modelo_comercial, c.modelo_micro,
+             c.modelo_sobre,     c.modelo_sufi_veh, c.modelo_sufi_moto,
+             c.modelo_sufi_cpe,  c.modelo_sufi_con, c.modelo_calm)
+      as modelo_general,
+    coalesce(c.pd_hip_vis, c.pd_hip_novis,
+             c.pd_lea_hab_vis, c.pd_lea_hab_novis)
+      as pd_vivienda,
+    coalesce(c.modelo_hip_vis, c.modelo_hip_novis,
+             c.modelo_lea_hab_vis, c.modelo_lea_hab_novis)
+      as modelo_vivienda
   from resultados_riesgos.maestro_calificaciones_pn c
-  cross join productos p
   where c.ingestion_year * 12 + c.ingestion_month between {DESDE} and {HASTA}
 ),
 
-largo as (
+-- Cross join contra 2 filas, no 16: duplica el volumen, no lo multiplica.
+series_pd as (
   select
-    r.num_doc,
-    r.tipo_doc,
-    r.ingestion_year,
-    r.ingestion_month,
-    r.segmento,
-    r.producto,
-    r.familia_producto,
-    r.pd,
-    r.grupo,
-    regexp_replace(r.grupo, '_[BMA]$', '') as grupo_base,
-    cast(substr(r.grupo, 2, 1) as int) * 10
-      + case substr(r.grupo, 4, 1)
-          when 'B' then 1
-          when 'M' then 2
-          when 'A' then 3
-          else 0
-        end as grupo_orden,
-    r.modelo
-  from largo_raw r
+    p.ingestion_year,
+    p.ingestion_month,
+    s.serie_pd,
+    case s.idx
+      when 1 then p.pd_general
+      when 2 then p.pd_vivienda
+    end as pd,
+    case s.idx
+      when 1 then p.modelo_general
+      when 2 then p.modelo_vivienda
+    end as modelo
+  from pd_cliente p
+  cross join series s
 ),
 
 -- La ventana se evalúa después del WHERE, así que `pd_max_modelo` es el
 -- máximo entre las filas que efectivamente entran al histograma.
 calificados as (
   select
-    l.ingestion_year,
-    l.ingestion_month,
-    l.producto,
-    l.modelo,
-    l.pd,
-    max(l.pd) over (partition by l.producto, l.modelo) as pd_max_modelo
-  from largo l
-  where l.grupo is not null
-    and l.pd is not null
+    sp.ingestion_year,
+    sp.ingestion_month,
+    sp.serie_pd,
+    sp.modelo,
+    sp.pd,
+    max(sp.pd) over (partition by sp.serie_pd, sp.modelo) as pd_max_modelo
+  from series_pd sp
+  where sp.pd is not null
 ),
 
 escalado as (
   select
     c.ingestion_year,
     c.ingestion_month,
-    c.producto,
+    c.serie_pd,
     c.modelo,
     c.pd,
     case when c.pd_max_modelo > 1 then 'puntaje_0_999'
@@ -188,7 +169,7 @@ binned as (
   select
     e.ingestion_year,
     e.ingestion_month,
-    e.producto,
+    e.serie_pd,
     e.modelo,
     e.pd,
     e.escala,
@@ -200,7 +181,7 @@ binned as (
 select
   b.ingestion_year,
   b.ingestion_month,
-  b.producto,
+  b.serie_pd,
   b.modelo,
   b.escala,
   b.bin,
@@ -214,7 +195,7 @@ from binned b
 group by
   b.ingestion_year,
   b.ingestion_month,
-  b.producto,
+  b.serie_pd,
   b.modelo,
   b.escala,
   b.bin,

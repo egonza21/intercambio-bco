@@ -15,15 +15,58 @@ productos.
   una falla del pipeline** — importante al leer el visual de cobertura.
 - Entre 15 y 17 MM de clientes por fecha de análisis, y **bajando**: ver
   "Ventana de datos y contracción de la base".
-- 16 productos, cada uno con su probabilidad de default (`pd`), su grupo de
-  riesgo (`g`) y el modelo que produjo esa PD. El grupo va de G1 a G8, salvo
-  en `sufi_moto`, `sufi_cpe` y `sufi_con`, donde G7 y G8 vienen abiertos en
-  bajo/medio/alto (`G7_B`, `G7_M`, `G7_A` y equivalentes en G8). Ver "Mapeo
-  idx → producto".
+- 16 productos, cada uno con una columna de probabilidad de default (`pd`),
+  una de grupo de riesgo (`g`) y una de modelo. **Pero las 16 columnas de
+  `pd` no son 16 PD distintas**: solo hay dos. Ver "La PD no es por
+  producto", que es lo primero que hay que entender de esta tabla.
+- El grupo va de G1 a G8, salvo en `sufi_moto`, `sufi_cpe` y `sufi_con`,
+  donde G7 y G8 vienen abiertos en bajo/medio/alto (`G7_B`, `G7_M`, `G7_A` y
+  equivalentes en G8). Ver "Mapeo idx → producto".
 - Un cliente aparece en varias fechas: se recalifica mensualmente.
 - Llave de cliente: `num_doc` + `tipo_doc`.
 - Partición: `ingestion_year` + `ingestion_month`. La calificación es mensual,
   así que "mes anterior" siempre es el mes calendario inmediatamente previo.
+
+## La PD no es por producto
+
+Verificado 2026-08-25. **Es el hallazgo estructural del repo**: cambia qué
+significa cada columna y qué agregados tienen sentido.
+
+**La tabla tiene 16 columnas `pd_*` pero solo dos PD distintas:**
+
+| serie      | columnas                                          | productos |
+|------------|---------------------------------------------------|-----------|
+| `general`  | `pd_consumo` … `pd_calm`, sin las de vivienda      | los 12 no-vivienda |
+| `vivienda` | `pd_hip_vis`, `pd_hip_novis`, `pd_lea_hab_vis`, `pd_lea_hab_novis` | los 4 de vivienda |
+
+La PD se replica **idéntica** dentro de cada grupo. Es un atributo del
+**cliente**, no del producto.
+
+Lo que sí es específico del producto es el **`grupo`**: cada producto traduce
+la misma PD a grupo con **sus propios cortes**. Ahí está toda la variación
+entre productos, y es lo que reconstruye `cortes_por_producto.sql`.
+
+### Qué se rompe si se ignora
+
+- **Sumar `pd` sobre productos cuenta la misma PD hasta 12 veces**, y el
+  número resultante parece razonable. Por eso `distribucion_grupo.sql` ya no
+  lleva ninguna columna de PD.
+- **Un histograma de PD "por producto" son 12 copias del mismo histograma**
+  (más 4 del de vivienda). El grano correcto es serie × modelo, no producto.
+- **`producto` no es una dimensión válida para nada que sea PD.** Si un
+  visual de PD tiene producto en algún eje o filtro, está mal construido.
+- Un cliente puede cambiar de grupo en un producto **sin que su PD se mueva**,
+  si cambian los cortes de ese producto. Migración de grupo y migración de PD
+  son fenómenos distintos: `migracion.sql` y `migracion_pd.sql`.
+
+### Cómo se toma cada serie en el SQL
+
+Con `COALESCE` sobre todas las columnas de su grupo, no desde una columna
+representativa. Si la replicación es exacta el coalesce es inocuo; si alguna
+columna llegara nula donde otra tiene valor, lo recupera. **Lo que el coalesce
+no hace es detectar que la replicación dejó de cumplirse** — se queda con la
+primera no nula y sigue. Si llega una carga nueva y hay dudas, comparar las
+columnas entre sí antes de confiar en los agregados de PD.
 
 ## Ventana de datos y contracción de la base
 
@@ -334,25 +377,57 @@ Requiere cruzar contra la base de clientes del mes, no solo contra la larga.
 
 ## Visuales que alimenta el tablero
 
+**El tablero tiene dos audiencias y se separan POR PÁGINA, no se mezclan.**
+Un visual de PD no va en una página funcional y uno de composición de grupos
+no va en una de modelos. El detalle de qué consulta alimenta cada bloque está
+en `powerbi/notas_modelo.md`, "Dos audiencias, dos bloques de páginas".
+
+### Páginas funcionales — equipo comercial y de negocio
+
+La pregunta es cómo se reparte la cartera, no cómo se comporta el modelo.
+
 Composición: distribución de `grupo` por producto (barra apilada 100%, con
 drill desde `familia_producto`; en `sufi_moto`/`sufi_cpe`/`sufi_con` esto
 muestra la apertura G7_B/M/A y G8_B/M/A, no solo G1-G8, y el apilado se ordena
-por `grupo_orden`), heatmap segmento × grupo, cobertura por producto,
-histograma de PD por modelo (nunca mezclando modelos de escala distinta),
-distribución de cuántos productos son ofertables por cliente.
+por `grupo_orden`), heatmap segmento × grupo, distribución de cuántos
+productos son ofertables por cliente.
 
-Evolución: mezcla de riesgo en el tiempo (área apilada), PD promedio ponderada
-por producto, PSI por modelo con umbrales en 0.1 y 0.25, vigencia de modelos
+Cobertura: % de clientes con grupo por producto, con la salvedad de
+`comercial`, `micro` y `sobregiro`.
+
+Evolución: mezcla de riesgo en el tiempo (área apilada, **en porcentaje**),
+evolución de la base de clientes en su propio visual, vigencia de modelos
 (% de población por versión de `modelo_*`).
 
-Migración: matriz 8×8 sobre `grupo_base` (más entradas y salidas), estabilidad
-como traza de la matriz, deterioro neto como masa bajo la diagonal menos masa
-sobre ella.
+Migración de grupo: matriz 8×8 sobre `grupo_base` (más entradas, salidas y
+pérdida de elegibilidad), estabilidad como traza de la matriz, deterioro neto
+como masa bajo la diagonal menos masa sobre ella.
 
 Consistencia: heatmap de `grupo_base` en un producto contra `grupo_base` en
 otro (para que las celdas sean comparables 8×8 incluso entre productos sufi y
 no-sufi), perfil consolidado por cliente (mejor grupo, peor grupo,
 dispersión).
+
+### Páginas de modelos — seguimiento técnico
+
+La pregunta es cómo se comporta el modelo. **Aquí `producto` no es una
+dimensión válida** salvo en sensibilidad de cortes, porque solo hay dos PD.
+
+PSI sobre las dos PD, por modelo, con umbrales en 0,1 y 0,25 (bins fijos).
+
+Histograma de PD por serie y modelo, nunca mezclando modelos de escala
+distinta.
+
+Vigencia de modelos: % de población por versión, y fecha en que cambió.
+
+Migración de PD por deciles: matriz 10×10 de ranking, con el mismo `{REZAGO}`
+que la de grupo. **No se lee como la de grupo**: una diagonal fuerte aquí dice
+que el orden se mantuvo, no que la distribución no se movió — eso lo dice el
+PSI.
+
+Sensibilidad de cortes: frontera de PD entre grupos consecutivos por producto,
+y detección de rangos solapados. Es el único visual técnico donde `producto`
+sí es dimensión, porque los cortes sí son por producto.
 
 ## Estructura del repo
 
@@ -364,11 +439,15 @@ sql/
     dominio_grupos_y_escala_pd.sql  dominio de grupo, escala de pd (4 y 5)
     validacion_mapeo.sql            cuadra los 16 count(g_*) contra `largo`
   10_agregados/      lo que consume Power BI
+    -- páginas funcionales (negocio)
     base_clientes.sql       clientes por mes y segmento (tabla ancha)
     cobertura_producto.sql  16 count(g_*), salida ancha, despivota en M
-    distribucion_grupo.sql  composición por grupo; grano con `grupo`
-    migracion.sql           matriz sobre grupo_base, con {REZAGO}
-    pd_por_modelo.sql       histograma y PSI, bins fijos por modelo
+    distribucion_grupo.sql  composición por grupo; sin PD
+    migracion.sql           matriz de grupo sobre grupo_base, con {REZAGO}
+    -- páginas de modelos (técnico)
+    pd_por_modelo.sql       histograma y PSI de las 2 PD, bins fijos
+    migracion_pd.sql        matriz de deciles de PD, con {REZAGO}
+    cortes_por_producto.sql fronteras de corte y detección de solapamiento
   _fragmentos/       cte_productos.sql — copia canónica del mapeo
 powerbi/
   notas_modelo.md    esquema estrella, parámetros M, relaciones
