@@ -193,10 +193,13 @@ series_pd as (
       when 1 then p.pd_general
       when 2 then p.pd_vivienda
     end as pd,
-    case s.idx
+    -- `''` y NULL son lo mismo -- ausencia de modelo -- y sin normalizar
+    -- serían dos categorías distintas en el tablero. Ver "El modelo vacío"
+    -- en CLAUDE.md.
+    nullif(trim(case s.idx
       when 1 then p.modelo_general
       when 2 then p.modelo_vivienda
-    end as modelo
+    end), '') as modelo
   from pd_cliente p
   cross join series s
 ),

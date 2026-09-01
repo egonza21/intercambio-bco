@@ -136,7 +136,9 @@ select
   r.segmento,
   r.producto,
   r.grupo,
-  r.modelo,
+  -- '' y NULL son lo mismo: ausencia de modelo. Ver "El modelo vacío"
+  -- en CLAUDE.md.
+  nullif(trim(r.modelo), '') as modelo,
   count(*) as clientes
 from largo_raw r
 where r.grupo is not null
@@ -146,4 +148,4 @@ group by
   r.segmento,
   r.producto,
   r.grupo,
-  r.modelo;
+  nullif(trim(r.modelo), '');

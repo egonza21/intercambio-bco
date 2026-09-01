@@ -146,7 +146,9 @@ rangos as (
     r.ingestion_year,
     r.ingestion_month,
     r.producto,
-    r.modelo,
+    -- '' y NULL son lo mismo: ausencia de modelo. Ver "El modelo vacío"
+    -- en CLAUDE.md.
+    nullif(trim(r.modelo), '') as modelo,
     r.grupo,
     count(*)   as clientes,
     min(r.pd)  as pd_min,
@@ -158,7 +160,7 @@ rangos as (
     r.ingestion_year,
     r.ingestion_month,
     r.producto,
-    r.modelo,
+    nullif(trim(r.modelo), ''),
     r.grupo
 )
 

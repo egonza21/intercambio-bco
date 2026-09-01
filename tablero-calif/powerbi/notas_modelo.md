@@ -207,9 +207,15 @@ El reparto que quedó:
   los hechos: `familia_producto` está determinada por `producto`. Los valores
   siguen pendientes de confirmar contra la clasificación oficial del banco
   (pendiente 6 de `CLAUDE.md`).
-- **dim_modelo**: versiones de `modelo_*`. `pd_por_modelo` ya trae la columna
-  `escala` (`probabilidad_0_1` / `puntaje_0_999`); conviene subirla a esta
-  dimensión para poder filtrar por unidad sin depender del hecho.
+- **dim_modelo**: ocho modelos vigentes, que aplican a los 16 productos —
+  `ADVANCE_1_1`, `ADVANCE_INCLUSION`, `T1_COMPORT`, `T1_COMPORT_NEI`,
+  `T1_COMPORT_SOCIAL`, `T2`, `T3_MARCAS`, `T_2_3` — más el miembro de
+  **modelo vacío** (sin modelo), que el SQL normaliza a NULL. Son pocos y
+  cerrados, así que también sirve "Especificar datos". `pd_por_modelo` ya trae
+  la columna `escala` (`probabilidad_0_1` / `puntaje_0_999`); conviene subirla
+  a esta dimensión para filtrar por unidad sin depender del hecho, pero la
+  **fuente de verdad sigue siendo el SQL**: la dimensión copia esa
+  clasificación, no la redefine. Ver `CLAUDE.md`, "Modelos y su escala".
 - **dim_fecha**: sobre `ingestion_year` + `ingestion_month`. Marcarla como
   tabla de fechas. Ojo: `migracion` se relaciona por su **mes destino**.
 
