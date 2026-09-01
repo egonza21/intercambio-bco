@@ -2,7 +2,7 @@
 -- Agregado: distribución de las dos PD, por modelo (histograma y PSI)
 -- ----------------------------------------------------------------------------
 -- Produce una fila por
---   ingestion_year + ingestion_month + serie_pd + modelo + bin
+--   ingestion_year + ingestion_month + segmento + serie_pd + modelo + bin
 -- con el conteo de clientes y los estadísticos del bin. Alimenta el
 -- histograma de PD y el PSI por modelo, con umbrales en 0,1 y 0,25.
 --
@@ -21,60 +21,100 @@
 -- sale de traducir esa PD con los cortes de cada producto (ver
 -- cortes_por_producto.sql).
 --
--- Consecuencias directas sobre esta query:
+-- Por eso el cross join es contra 2 series, no contra 16 productos, y
+-- `producto` NO está en el grano: un histograma "de consumo" y uno "de tdc"
+-- eran el mismo histograma repetido.
 --
---   - NO hay cross join contra los 16 productos. Se cruza contra un CTE de
---     2 series, así que el volumen se duplica en vez de multiplicarse por 16.
---     Es ~8 veces más barata que la versión anterior y mide lo mismo.
---   - `producto` NO está en el grano: no significa nada aquí. Un histograma
---     de PD "de consumo" y uno "de tdc" eran el mismo histograma repetido.
---   - El grano es `serie_pd` + `modelo`. Dos series:
---       general   la PD de los 12 productos no-vivienda
---       vivienda  la PD de hip_vis, hip_novis, lea_hab_vis, lea_hab_novis
+--   general   la PD de los 12 productos no-vivienda
+--   vivienda  la PD de hip_vis, hip_novis, lea_hab_vis, lea_hab_novis
 --
--- Cada serie se toma con COALESCE sobre las columnas de su grupo, no de una
--- sola columna representativa. Si la replicación es exacta el coalesce es
--- inocuo; si alguna columna llegara nula donde otra tiene valor, lo recupera
--- en vez de perder la fila. El costo es nulo y protege contra el único modo
--- de falla plausible de la premisa.
+-- La PD se toma con COALESCE sobre las columnas de su grupo, y el modelo
+-- **con un CASE que sigue el MISMO orden**, no con un coalesce aparte. Es
+-- deliberado: dos coalesce independientes pueden salir de columnas
+-- distintas -- si `pd_consumo` viene nula y `modelo_consumo` no, la PD sale
+-- de tdc y el modelo de consumo, y quedan emparejados mal. El CASE
+-- `when pd_X is not null then modelo_X` garantiza que el modelo venga de la
+-- misma columna que aportó la PD.
 --
--- OJO: si la replicación dejara de cumplirse, esta query no lo detecta -- el
--- coalesce se queda con la primera no nula y sigue. Vale correr una
--- comparación columna a columna antes de dar por buena una carga nueva.
+-- OJO: si la replicación dejara de cumplirse, esta query no lo detecta.
+-- Vale comparar las columnas entre sí antes de dar por buena una carga nueva.
 --
 -- ----------------------------------------------------------------------------
 -- El filtro es `pd IS NOT NULL`, NO `grupo IS NOT NULL`
 -- ----------------------------------------------------------------------------
--- Es la excepción a la regla estándar del repo, y se sigue del hallazgo de
--- arriba: `grupo IS NOT NULL` responde "el cliente califica en ESTE
--- producto", que es una pregunta de producto. Aquí la población correcta es
--- la que el modelo alcanzó a calificar, tenga o no grupo en algún producto.
--- Filtrar por grupo de un producto cualquiera sesgaría la distribución hacia
--- la población elegible de ese producto.
+-- Es la excepción a la regla estándar del repo: `grupo IS NOT NULL` responde
+-- "el cliente califica en ESTE producto", que es una pregunta de producto.
+-- Aquí la población correcta es la que el modelo alcanzó a calificar.
 --
 -- ----------------------------------------------------------------------------
--- Escala y bins fijos, que es lo que el PSI exige
+-- Bins: logarítmicos para probabilidad, lineales para puntaje
+-- ----------------------------------------------------------------------------
+-- **Las PD observadas se concentran en el extremo bajo del rango**, en una
+-- franja estrecha muy por debajo de 0,05, no repartidas sobre [0,1]. Con bins
+-- lineales de 0,05 el 100% de los clientes cae en el bin 0: el histograma es
+-- una sola barra y el PSI da cero SIEMPRE, porque compara una distribución
+-- degenerada contra otra idéntica. Es un cero que parece estabilidad y en
+-- realidad es ceguera del instrumento.
+--
+-- Binning para `probabilidad_0_1`: **logarítmico, 20 bins por década**.
+--
+--     bin = floor(log10(pd) * 20)
+--
+-- Cada bin abarca un factor de 10^(1/20) = 1,122, o sea pasos de ~12%. La
+-- resolución es relativa, no absoluta: el ancho del bin se encoge junto con
+-- la PD, así que la franja donde se concentra la población queda repartida
+-- en decenas de bins en vez de colapsar en uno. Correr
+-- sql/00_perfilado/dominio_grupos_y_escala_pd.sql da el rango vigente si hace
+-- falta confirmar que el binning lo cubre.
+--
+-- Los índices salen negativos porque pd < 1 (una PD de una milésima cae
+-- alrededor del bin -60). No es un problema: son etiquetas de bin, y
+-- `bin_min` / `bin_max` viajan en la salida con el valor real de PD de cada
+-- borde, que es lo que se muestra en el eje.
+--
+-- Binning para `puntaje_0_999`: **lineal de ancho 50**, 20 bins sobre
+-- 0-1000. Ahí el problema no existe porque el puntaje sí usa todo su rango.
+--
+-- **Los bordes son FIJOS y no dependen de los datos ni del período.** Es
+-- condición necesaria del PSI: si se recalcularan por período (deciles del
+-- mes, o un rango derivado de min/max), cada período quedaría equireparado
+-- por construcción y el PSI volvería a dar ~0. Un bin sin clientes
+-- simplemente no produce fila, así que definir una escala generosa no cuesta
+-- nada.
+--
+-- (Contraste deliberado con migracion_pd.sql, que SÍ usa deciles por
+-- período: ahí la pregunta es de reordenamiento dentro del ranking, no de
+-- desplazamiento de la distribución.)
+--
+-- `greatest(pd, 0.000001)` protege el log10 de un pd = 0, que no se espera
+-- pero daría -infinito. Cae en el bin -120, visible y aislado.
+--
+-- ----------------------------------------------------------------------------
+-- La escala se deriva del NOMBRE del modelo
 -- ----------------------------------------------------------------------------
 -- El modelo "advanced" deja en pd el puntaje crudo, de 0 a 999, en vez de una
--- probabilidad en [0,1]. La escala se detecta con
--- `max(pd) over (partition by serie_pd, modelo)`: con función de ventana y no
--- con un segundo agregado, para no recorrer los datos dos veces.
+-- probabilidad. Antes esto se detectaba con `max(pd) over (partition by ...)`
+-- sobre ~30 MM de filas: caro (un shuffle completo solo para clasificar) y
+-- frágil (dependía de que el máximo observado cruzara el umbral de 1 en cada
+-- ventana de refresco).
 --
--- 20 bins de ancho constante por escala: 0,05 para probabilidad (0 a 1) y 50
--- para puntaje (0 a 1000). Los bordes son FIJOS, no cuantiles del período.
+-- Ahora sale del nombre, que es un dato del modelo y no de la muestra:
 --
--- Es deliberado: el PSI compara la distribución de un período contra otro
--- sobre los MISMOS bins. Si los bordes se recalcularan por período, cada
--- período quedaría equireparado por construcción y el PSI daría siempre ~0,
--- que es justo el resultado que se quiere detectar cuando no es cierto.
+--     lower(modelo) like '%advanced%'  ->  puntaje_0_999
+--     cualquier otro                   ->  probabilidad_0_1
 --
--- (Contraste deliberado con migracion_pd.sql, que SÍ usa deciles por período:
--- ahí la pregunta es de reordenamiento dentro del ranking, no de
--- desplazamiento de la distribución. Son análisis distintos y no
--- intercambiables.)
+-- **Esta regla hay que revisarla cuando aparezca un modelo nuevo.** Un modelo
+-- de puntaje que no se llame "advanced" quedaría clasificado como
+-- probabilidad y sus bins saldrían mal. `sql/00_perfilado/
+-- dominio_grupos_y_escala_pd.sql` es la query que lo detecta: si el pd_max de
+-- algún modelo pasa de 1 y no matchea la regla, hay que ampliarla aquí.
 --
--- `least(..., 19)` agrupa en el último bin lo que caiga en el borde superior
--- o por encima, para que ningún cliente quede fuera del histograma.
+-- ----------------------------------------------------------------------------
+-- Grano
+-- ----------------------------------------------------------------------------
+-- `segmento` SÍ entra: el PSI por segmento es una pregunta legítima de
+-- seguimiento (un modelo puede degradarse en un segmento y no en otro), y sin
+-- la columna en el hecho no hay forma de reconstruirlo desde Power BI.
 --
 -- El PSI se calcula en DAX sobre este agregado. Aquí solo van los conteos.
 --
@@ -90,31 +130,42 @@ with series as (
 ),
 
 -- ----------------------------------------------------------------------------
--- Las dos PD del cliente, con su modelo. Una sola pasada de la tabla ancha,
--- sin unpivot por producto.
+-- Las dos PD del cliente, cada una con el modelo de la MISMA columna que
+-- aportó la PD. Una sola pasada de la tabla ancha, sin unpivot por producto.
 -- ----------------------------------------------------------------------------
 
 pd_cliente as (
   select
-    c.num_doc,
-    c.tipo_doc,
     c.ingestion_year,
     c.ingestion_month,
+    c.segmento,
     coalesce(c.pd_consumo,   c.pd_tdc,       c.pd_libranza,  c.pd_rota,
              c.pd_comercial, c.pd_micro,     c.pd_sobre,     c.pd_sufi_veh,
              c.pd_sufi_moto, c.pd_sufi_cpe,  c.pd_sufi_con,  c.pd_calm)
       as pd_general,
-    coalesce(c.modelo_consumo,   c.modelo_tdc,      c.modelo_libranza,
-             c.modelo_rota,      c.modelo_comercial, c.modelo_micro,
-             c.modelo_sobre,     c.modelo_sufi_veh, c.modelo_sufi_moto,
-             c.modelo_sufi_cpe,  c.modelo_sufi_con, c.modelo_calm)
-      as modelo_general,
+    case
+      when c.pd_consumo   is not null then c.modelo_consumo
+      when c.pd_tdc       is not null then c.modelo_tdc
+      when c.pd_libranza  is not null then c.modelo_libranza
+      when c.pd_rota      is not null then c.modelo_rota
+      when c.pd_comercial is not null then c.modelo_comercial
+      when c.pd_micro     is not null then c.modelo_micro
+      when c.pd_sobre     is not null then c.modelo_sobre
+      when c.pd_sufi_veh  is not null then c.modelo_sufi_veh
+      when c.pd_sufi_moto is not null then c.modelo_sufi_moto
+      when c.pd_sufi_cpe  is not null then c.modelo_sufi_cpe
+      when c.pd_sufi_con  is not null then c.modelo_sufi_con
+      when c.pd_calm      is not null then c.modelo_calm
+    end as modelo_general,
     coalesce(c.pd_hip_vis, c.pd_hip_novis,
              c.pd_lea_hab_vis, c.pd_lea_hab_novis)
       as pd_vivienda,
-    coalesce(c.modelo_hip_vis, c.modelo_hip_novis,
-             c.modelo_lea_hab_vis, c.modelo_lea_hab_novis)
-      as modelo_vivienda
+    case
+      when c.pd_hip_vis       is not null then c.modelo_hip_vis
+      when c.pd_hip_novis     is not null then c.modelo_hip_novis
+      when c.pd_lea_hab_vis   is not null then c.modelo_lea_hab_vis
+      when c.pd_lea_hab_novis is not null then c.modelo_lea_hab_novis
+    end as modelo_vivienda
   from resultados_riesgos.maestro_calificaciones_pn c
   where c.ingestion_year * 12 + c.ingestion_month between {DESDE} and {HASTA}
 ),
@@ -124,6 +175,7 @@ series_pd as (
   select
     p.ingestion_year,
     p.ingestion_month,
+    p.segmento,
     s.serie_pd,
     case s.idx
       when 1 then p.pd_general
@@ -137,66 +189,63 @@ series_pd as (
   cross join series s
 ),
 
--- La ventana se evalúa después del WHERE, así que `pd_max_modelo` es el
--- máximo entre las filas que efectivamente entran al histograma.
-calificados as (
+-- La escala sale del nombre del modelo, no de un max() sobre los datos.
+escalado as (
   select
     sp.ingestion_year,
     sp.ingestion_month,
+    sp.segmento,
     sp.serie_pd,
     sp.modelo,
     sp.pd,
-    max(sp.pd) over (partition by sp.serie_pd, sp.modelo) as pd_max_modelo
+    case when lower(sp.modelo) like '%advanced%' then 'puntaje_0_999'
+         else 'probabilidad_0_1' end as escala
   from series_pd sp
   where sp.pd is not null
-),
-
-escalado as (
-  select
-    c.ingestion_year,
-    c.ingestion_month,
-    c.serie_pd,
-    c.modelo,
-    c.pd,
-    case when c.pd_max_modelo > 1 then 'puntaje_0_999'
-         else 'probabilidad_0_1' end as escala,
-    case when c.pd_max_modelo > 1 then 50.0
-         else 0.05 end as bin_ancho
-  from calificados c
 ),
 
 binned as (
   select
     e.ingestion_year,
     e.ingestion_month,
+    e.segmento,
     e.serie_pd,
     e.modelo,
-    e.pd,
     e.escala,
-    e.bin_ancho,
-    least(cast(floor(e.pd / e.bin_ancho) as int), 19) as bin
+    e.pd,
+    case when e.escala = 'puntaje_0_999'
+         then least(cast(floor(e.pd / 50.0) as int), 19)
+         else cast(floor(log10(greatest(e.pd, 0.000001)) * 20) as int)
+    end as bin
   from escalado e
 )
 
 select
   b.ingestion_year,
   b.ingestion_month,
+  b.segmento,
   b.serie_pd,
   b.modelo,
   b.escala,
   b.bin,
-  b.bin * b.bin_ancho         as bin_min,
-  (b.bin + 1) * b.bin_ancho   as bin_max,
-  count(*)                    as clientes,
-  sum(b.pd)                   as pd_suma,
-  min(b.pd)                   as pd_min,
-  max(b.pd)                   as pd_max
+  case when b.escala = 'puntaje_0_999'
+       then b.bin * 50.0
+       else pow(10, b.bin / 20.0)
+  end as bin_min,
+  case when b.escala = 'puntaje_0_999'
+       then (b.bin + 1) * 50.0
+       else pow(10, (b.bin + 1) / 20.0)
+  end as bin_max,
+  count(*)   as clientes,
+  sum(b.pd)  as pd_suma,
+  min(b.pd)  as pd_min,
+  max(b.pd)  as pd_max
 from binned b
 group by
   b.ingestion_year,
   b.ingestion_month,
+  b.segmento,
   b.serie_pd,
   b.modelo,
   b.escala,
-  b.bin,
-  b.bin_ancho;
+  b.bin;

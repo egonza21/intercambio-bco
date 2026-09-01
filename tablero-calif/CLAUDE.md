@@ -401,7 +401,10 @@ evolución de la base de clientes en su propio visual, vigencia de modelos
 
 Migración de grupo: matriz 8×8 sobre `grupo_base` (más entradas, salidas y
 pérdida de elegibilidad), estabilidad como traza de la matriz, deterioro neto
-como masa bajo la diagonal menos masa sobre ella.
+como masa bajo la diagonal menos masa sobre ella. El agregado trae
+`segmento_anterior` y `segmento_actual` por separado: un cliente que cambia de
+segmento no cambió de riesgo, y sin las dos columnas aparece como pérdida y
+ganancia de elegibilidad simultáneas.
 
 Consistencia: heatmap de `grupo_base` en un producto contra `grupo_base` en
 otro (para que las celdas sean comparables 8×8 incluso entre productos sufi y

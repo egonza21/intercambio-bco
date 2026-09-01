@@ -2,8 +2,8 @@
 -- Perfilado: validación del mapeo idx -> producto del unpivot
 -- ----------------------------------------------------------------------------
 -- Compara, para UN mes, los 16 `count(g_*)` de la tabla ancha contra el
--- conteo por producto en `largo` con `grupo IS NOT NULL`. Produce 16 filas
--- con `conteo_ancho`, `conteo_largo` y `diferencia`.
+-- conteo por producto en la tabla larga con `grupo IS NOT NULL`. Produce 16
+-- filas con `conteo_ancho`, `conteo_largo` y `diferencia`.
 --
 -- **Todas las diferencias deben dar 0.** Cualquier fila distinta de 0 señala
 -- un CASE desalineado en el unpivot.
@@ -25,30 +25,40 @@
 -- automatiza este archivo.
 --
 -- ----------------------------------------------------------------------------
--- Límite de esta validación -- leer antes de confiar en ella
+-- El lado ancho NO usa idx ni CASE -- ese es todo el punto
 -- ----------------------------------------------------------------------------
--- El lado ancho usa su propio CASE idx -> conteo, así que hay DOS mapeos en
--- juego. La query atrapa un desalineo introducido en uno de los dos, que es
--- el caso realista: alguien edita el fragmento canónico y desplaza un WHEN.
--- NO atrapa un desalineo idéntico copiado en ambos.
+-- `conteos_ancho` es un UNION ALL de 16 ramas, cada una con el nombre del
+-- producto escrito LITERALMENTE al lado de su columna:
 --
--- Por eso el CASE de `ancho_por_producto` se escribe siguiendo la tabla de
--- CLAUDE.md, NO copiando el bloque del fragmento. Si alguna vez hay que
--- tocarlo, transcribirlo de nuevo desde la tabla en lugar de copiar y pegar
--- del otro lado del archivo.
+--     select 'rotativo', count(c.g_rota) ...
+--
+-- No hay posición, ni índice, ni CASE. Por eso el desalineo del fragmento
+-- canónico no se puede replicar aquí: no existe nada que replicar. Una
+-- versión anterior de este archivo usaba un segundo `case p.idx`, y eso la
+-- hacía validarse contra sí misma -- si el error se copiaba a los dos lados,
+-- los dos conteos quedaban mal igual y la diferencia daba 0.
+--
+-- **No introducir un CASE por idx en este archivo bajo ningún concepto**,
+-- aunque parezca que ahorra líneas. Las 48 líneas repetitivas son el
+-- mecanismo, no un descuido.
 --
 -- Los dos lugares donde el nombre del producto NO coincide con el sufijo de
--- la columna son `rotativo` -> `g_rota` (idx 4) y `sobregiro` -> `g_sobre`
--- (idx 11). Son los candidatos más probables a un desalineo silencioso, y la
--- razón de que valga la pena correr esto en vez de leer el CASE a ojo.
+-- la columna son `rotativo` -> `g_rota` y `sobregiro` -> `g_sobre`. Son los
+-- candidatos más probables a un desalineo silencioso.
 --
 -- ----------------------------------------------------------------------------
 -- Costo
 -- ----------------------------------------------------------------------------
--- `conteos_ancho` agrega a UNA fila de 16 columnas y se referencia una sola
--- vez; el cross join contra `productos` la abre a 16 filas sin releer nada.
--- El lado largo hace su propia pasada con el unpivot. Son dos lecturas de un
--- mes, no de la ventana completa: correrla mes a mes es barato.
+-- El precio de la independencia son 16 agregados sobre el mismo mes, uno por
+-- rama del UNION ALL. Cada uno lee UNA sola columna, así que sobre Parquet
+-- son 16 lecturas de ~1/48 de los datos, no 16 lecturas completas. El lado
+-- largo hace su propia pasada con el unpivot. Sobre un mes es barato;
+-- correrla sobre la ventana entera no tendría sentido, para eso está {MES}.
+--
+-- El CTE `largo` de este archivo no calcula `grupo_base` ni `grupo_orden`:
+-- no se usan aquí y serían un regexp_replace sobre las expansiones del cross
+-- join para nada. Los tres bloques `case p.idx` sí son idénticos al
+-- fragmento canónico, que es lo que esta query valida.
 -- ============================================================================
 
 with productos as (
@@ -70,25 +80,9 @@ with productos as (
     union all select 16, 'calm',          'consumo'
 ),
 
-largo_raw as (
+largo as (
   select
-    c.num_doc,
-    c.tipo_doc,
-    c.ingestion_year,
-    c.ingestion_month,
-    c.segmento,
     p.producto,
-    p.familia_producto,
-    case p.idx
-      when  1 then c.pd_consumo        when  2 then c.pd_tdc
-      when  3 then c.pd_libranza       when  4 then c.pd_rota
-      when  5 then c.pd_hip_vis        when  6 then c.pd_hip_novis
-      when  7 then c.pd_lea_hab_vis    when  8 then c.pd_lea_hab_novis
-      when  9 then c.pd_comercial      when 10 then c.pd_micro
-      when 11 then c.pd_sobre          when 12 then c.pd_sufi_veh
-      when 13 then c.pd_sufi_moto      when 14 then c.pd_sufi_cpe
-      when 15 then c.pd_sufi_con       when 16 then c.pd_calm
-    end as pd,
     case p.idx
       when  1 then c.g_consumo         when  2 then c.g_tdc
       when  3 then c.g_libranza        when  4 then c.g_rota
@@ -98,43 +92,10 @@ largo_raw as (
       when 11 then c.g_sobre           when 12 then c.g_sufi_veh
       when 13 then c.g_sufi_moto       when 14 then c.g_sufi_cpe
       when 15 then c.g_sufi_con        when 16 then c.g_calm
-    end as grupo,
-    case p.idx
-      when  1 then c.modelo_consumo       when  2 then c.modelo_tdc
-      when  3 then c.modelo_libranza      when  4 then c.modelo_rota
-      when  5 then c.modelo_hip_vis       when  6 then c.modelo_hip_novis
-      when  7 then c.modelo_lea_hab_vis   when  8 then c.modelo_lea_hab_novis
-      when  9 then c.modelo_comercial     when 10 then c.modelo_micro
-      when 11 then c.modelo_sobre         when 12 then c.modelo_sufi_veh
-      when 13 then c.modelo_sufi_moto     when 14 then c.modelo_sufi_cpe
-      when 15 then c.modelo_sufi_con      when 16 then c.modelo_calm
-    end as modelo
+    end as grupo
   from resultados_riesgos.maestro_calificaciones_pn c
   cross join productos p
   where c.ingestion_year * 12 + c.ingestion_month = {MES}
-),
-
-largo as (
-  select
-    r.num_doc,
-    r.tipo_doc,
-    r.ingestion_year,
-    r.ingestion_month,
-    r.segmento,
-    r.producto,
-    r.familia_producto,
-    r.pd,
-    r.grupo,
-    regexp_replace(r.grupo, '_[BMA]$', '') as grupo_base,
-    cast(substr(r.grupo, 2, 1) as int) * 10
-      + case substr(r.grupo, 4, 1)
-          when 'B' then 1
-          when 'M' then 2
-          when 'A' then 3
-          else 0
-        end as grupo_orden,
-    r.modelo
-  from largo_raw r
 ),
 
 conteo_largo as (
@@ -147,52 +108,74 @@ conteo_largo as (
 ),
 
 -- ----------------------------------------------------------------------------
--- Lado ancho: una sola fila con 16 conteos. `count(columna)` ignora nulos.
+-- Lado ancho. Nombre literal junto a su columna, sin idx y sin CASE.
+-- `count(columna)` ignora nulos.
 -- ----------------------------------------------------------------------------
 
 conteos_ancho as (
-  select
-    count(c.g_consumo)        as n_consumo,
-    count(c.g_tdc)            as n_tdc,
-    count(c.g_libranza)       as n_libranza,
-    count(c.g_rota)           as n_rota,
-    count(c.g_hip_vis)        as n_hip_vis,
-    count(c.g_hip_novis)      as n_hip_novis,
-    count(c.g_lea_hab_vis)    as n_lea_hab_vis,
-    count(c.g_lea_hab_novis)  as n_lea_hab_novis,
-    count(c.g_comercial)      as n_comercial,
-    count(c.g_micro)          as n_micro,
-    count(c.g_sobre)          as n_sobre,
-    count(c.g_sufi_veh)       as n_sufi_veh,
-    count(c.g_sufi_moto)      as n_sufi_moto,
-    count(c.g_sufi_cpe)       as n_sufi_cpe,
-    count(c.g_sufi_con)       as n_sufi_con,
-    count(c.g_calm)           as n_calm
-  from resultados_riesgos.maestro_calificaciones_pn c
-  where c.ingestion_year * 12 + c.ingestion_month = {MES}
-),
+              select 'consumo' as producto, count(c.g_consumo) as conteo_ancho
+              from resultados_riesgos.maestro_calificaciones_pn c
+              where c.ingestion_year * 12 + c.ingestion_month = {MES}
 
--- ----------------------------------------------------------------------------
--- Abre esa fila única a 16, una por producto. Este CASE se transcribe de la
--- tabla de CLAUDE.md, no se copia del bloque de arriba: ver "Límite de esta
--- validación" en el encabezado.
--- ----------------------------------------------------------------------------
+    union all select 'tdc', count(c.g_tdc)
+              from resultados_riesgos.maestro_calificaciones_pn c
+              where c.ingestion_year * 12 + c.ingestion_month = {MES}
 
-ancho_por_producto as (
-  select
-    p.producto,
-    case p.idx
-      when  1 then a.n_consumo        when  2 then a.n_tdc
-      when  3 then a.n_libranza       when  4 then a.n_rota
-      when  5 then a.n_hip_vis        when  6 then a.n_hip_novis
-      when  7 then a.n_lea_hab_vis    when  8 then a.n_lea_hab_novis
-      when  9 then a.n_comercial      when 10 then a.n_micro
-      when 11 then a.n_sobre          when 12 then a.n_sufi_veh
-      when 13 then a.n_sufi_moto      when 14 then a.n_sufi_cpe
-      when 15 then a.n_sufi_con       when 16 then a.n_calm
-    end as conteo_ancho
-  from conteos_ancho a
-  cross join productos p
+    union all select 'libranza', count(c.g_libranza)
+              from resultados_riesgos.maestro_calificaciones_pn c
+              where c.ingestion_year * 12 + c.ingestion_month = {MES}
+
+    union all select 'rotativo', count(c.g_rota)
+              from resultados_riesgos.maestro_calificaciones_pn c
+              where c.ingestion_year * 12 + c.ingestion_month = {MES}
+
+    union all select 'hip_vis', count(c.g_hip_vis)
+              from resultados_riesgos.maestro_calificaciones_pn c
+              where c.ingestion_year * 12 + c.ingestion_month = {MES}
+
+    union all select 'hip_novis', count(c.g_hip_novis)
+              from resultados_riesgos.maestro_calificaciones_pn c
+              where c.ingestion_year * 12 + c.ingestion_month = {MES}
+
+    union all select 'lea_hab_vis', count(c.g_lea_hab_vis)
+              from resultados_riesgos.maestro_calificaciones_pn c
+              where c.ingestion_year * 12 + c.ingestion_month = {MES}
+
+    union all select 'lea_hab_novis', count(c.g_lea_hab_novis)
+              from resultados_riesgos.maestro_calificaciones_pn c
+              where c.ingestion_year * 12 + c.ingestion_month = {MES}
+
+    union all select 'comercial', count(c.g_comercial)
+              from resultados_riesgos.maestro_calificaciones_pn c
+              where c.ingestion_year * 12 + c.ingestion_month = {MES}
+
+    union all select 'micro', count(c.g_micro)
+              from resultados_riesgos.maestro_calificaciones_pn c
+              where c.ingestion_year * 12 + c.ingestion_month = {MES}
+
+    union all select 'sobregiro', count(c.g_sobre)
+              from resultados_riesgos.maestro_calificaciones_pn c
+              where c.ingestion_year * 12 + c.ingestion_month = {MES}
+
+    union all select 'sufi_veh', count(c.g_sufi_veh)
+              from resultados_riesgos.maestro_calificaciones_pn c
+              where c.ingestion_year * 12 + c.ingestion_month = {MES}
+
+    union all select 'sufi_moto', count(c.g_sufi_moto)
+              from resultados_riesgos.maestro_calificaciones_pn c
+              where c.ingestion_year * 12 + c.ingestion_month = {MES}
+
+    union all select 'sufi_cpe', count(c.g_sufi_cpe)
+              from resultados_riesgos.maestro_calificaciones_pn c
+              where c.ingestion_year * 12 + c.ingestion_month = {MES}
+
+    union all select 'sufi_con', count(c.g_sufi_con)
+              from resultados_riesgos.maestro_calificaciones_pn c
+              where c.ingestion_year * 12 + c.ingestion_month = {MES}
+
+    union all select 'calm', count(c.g_calm)
+              from resultados_riesgos.maestro_calificaciones_pn c
+              where c.ingestion_year * 12 + c.ingestion_month = {MES}
 )
 
 select
@@ -200,7 +183,7 @@ select
   a.conteo_ancho,
   coalesce(l.conteo_largo, 0) as conteo_largo,
   a.conteo_ancho - coalesce(l.conteo_largo, 0) as diferencia
-from ancho_por_producto a
+from conteos_ancho a
 left join conteo_largo l
   on a.producto = l.producto
 order by a.producto;

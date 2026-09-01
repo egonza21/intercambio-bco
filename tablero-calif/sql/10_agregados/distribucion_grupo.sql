@@ -32,14 +32,17 @@
 -- - `familia_producto`: está determinada por `producto`, así que vive en la
 --   dimensión de producto. Repetirla aquí solo engorda el hecho.
 --
--- El CTE `largo` sí sigue calculando `grupo_base` y `grupo_orden` porque esta
--- copia del fragmento canónico se mantiene textualmente idéntica a
--- sql/_fragmentos/cte_productos.sql -- así un diff entre las dos delata
--- cualquier desalineo del mapeo. El SELECT final no las referencia, y como
--- Impala inlinea los CTEs y poda columnas no usadas, no deberían costar
--- nada. Si el perfilado de esta query muestra lo contrario en el plan
--- (regexp_replace evaluándose sobre las ~240 MM de filas del cross join),
--- borrarlas de ESTA copia es seguro y es lo primero que hay que probar.
+-- **Esta copia del fragmento canónico no lleva el CTE `largo`.** Como aquí no
+-- se usa ninguna columna derivada, calcular `grupo_base` y `grupo_orden`
+-- sería un regexp_replace más aritmética de strings sobre las ~240 MM de
+-- expansiones que produce el cross join cada mes, para descartarlas después.
+-- Una versión anterior las dejaba puestas confiando en que Impala podaría las
+-- columnas no referenciadas; eso era una suposición, no un hecho verificado,
+-- y no vale el riesgo cuando quitarlas es gratis.
+--
+-- Lo que SÍ se mantiene idéntico al fragmento canónico son los tres bloques
+-- `case p.idx` del mapeo: es lo único que tiene que estar alineado entre
+-- copias, y lo que valida sql/00_perfilado/validacion_mapeo.sql.
 --
 -- ----------------------------------------------------------------------------
 -- Cómo leer las métricas
@@ -124,43 +127,23 @@ largo_raw as (
   where c.ingestion_year * 12 + c.ingestion_month between {DESDE} and {HASTA}
 ),
 
-largo as (
-  select
-    r.num_doc,
-    r.tipo_doc,
-    r.ingestion_year,
-    r.ingestion_month,
-    r.segmento,
-    r.producto,
-    r.familia_producto,
-    r.pd,
-    r.grupo,
-    regexp_replace(r.grupo, '_[BMA]$', '') as grupo_base,
-    cast(substr(r.grupo, 2, 1) as int) * 10
-      + case substr(r.grupo, 4, 1)
-          when 'B' then 1
-          when 'M' then 2
-          when 'A' then 3
-          else 0
-        end as grupo_orden,
-    r.modelo
-  from largo_raw r
-)
+-- Sin CTE `largo`: esta query no usa ninguna columna derivada, así que el
+-- SELECT final consume `largo_raw` directo. Ver el encabezado.
 
 select
-  l.ingestion_year,
-  l.ingestion_month,
-  l.segmento,
-  l.producto,
-  l.grupo,
-  l.modelo,
+  r.ingestion_year,
+  r.ingestion_month,
+  r.segmento,
+  r.producto,
+  r.grupo,
+  r.modelo,
   count(*) as clientes
-from largo l
-where l.grupo is not null
+from largo_raw r
+where r.grupo is not null
 group by
-  l.ingestion_year,
-  l.ingestion_month,
-  l.segmento,
-  l.producto,
-  l.grupo,
-  l.modelo;
+  r.ingestion_year,
+  r.ingestion_month,
+  r.segmento,
+  r.producto,
+  r.grupo,
+  r.modelo;

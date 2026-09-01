@@ -2,11 +2,28 @@
 -- Agregado: matriz de migración de grupo de riesgo, con rezago parametrizable
 -- ----------------------------------------------------------------------------
 -- Produce una fila por
---   mes destino + segmento + producto + grupo_base_origen +
---   grupo_base_destino + categoria
+--   mes destino + segmento_anterior + segmento_actual + producto +
+--   grupo_base_origen + grupo_base_destino + categoria
 -- con el conteo de clientes. Alimenta la matriz 8x8, la estabilidad (traza de
 -- la matriz) y el deterioro neto (masa bajo la diagonal menos masa sobre
 -- ella).
+--
+-- ----------------------------------------------------------------------------
+-- Dos columnas de segmento, no una coalescida
+-- ----------------------------------------------------------------------------
+-- `segmento_anterior` (el del mes origen) y `segmento_actual` (el del mes
+-- destino) viajan por separado. Con una sola columna coalescida se pierde el
+-- cambio de segmento, y eso importa: **un cliente que cambia de segmento no
+-- cambió de riesgo**, pero al filtrar la matriz por un segmento aparece
+-- saliendo de uno y entrando al otro, indistinguible de una pérdida y una
+-- ganancia de elegibilidad reales.
+--
+-- Con las dos columnas se aísla con `segmento_anterior <> segmento_actual`,
+-- y se puede elegir entre mirar la migración a segmento constante o incluir
+-- los movimientos entre segmentos.
+--
+-- En las filas de `entrada` el `segmento_anterior` queda NULL, y en las de
+-- `salida` el `segmento_actual`: no hay mes del otro lado de donde sacarlo.
 --
 -- Parámetros:
 --   {DESDE}, {HASTA} -- rango de meses DESTINO, en ingestion_year*12+ingestion_month
@@ -88,9 +105,14 @@
 -- anticipa. Es la query más cara del repo: medirla aparte.
 --
 -- El filtro de partición se amplía {REZAGO} meses hacia atrás respecto de los
--- demás agregados, porque el mes origen tiene que entrar en la lectura. Es la
--- ÚNICA diferencia contra la copia canónica de sql/_fragmentos/
--- cte_productos.sql: los tres bloques CASE del mapeo son idénticos.
+-- demás agregados, porque el mes origen tiene que entrar en la lectura.
+--
+-- Contra la copia canónica de sql/_fragmentos/cte_productos.sql esta copia
+-- difiere en dos cosas: ese filtro, y que `largo` se queda solo con las
+-- columnas que la query usa (sin `grupo_orden`, sin `pd`, sin
+-- `familia_producto`). **Los tres bloques `case p.idx` del mapeo sí son
+-- idénticos**, que es lo único que tiene que mantenerse alineado entre
+-- copias y lo que valida sql/00_perfilado/validacion_mapeo.sql.
 --
 -- `count(*)` cuenta clientes: el full outer join es sobre
 -- cliente + producto + mes, que es llave única a cada lado, así que cada
@@ -164,6 +186,10 @@ largo_raw as (
         between {DESDE} - {REZAGO} and {HASTA}
 ),
 
+-- Solo `grupo_base`, que es el eje de la matriz. `grupo_orden` NO se calcula:
+-- esta query no lo selecciona, y sería aritmética sobre las ~240 MM de
+-- expansiones del cross join para nada. El orden de los ejes sale de la
+-- dimensión en Power BI.
 largo as (
   select
     r.num_doc,
@@ -172,18 +198,8 @@ largo as (
     r.ingestion_month,
     r.segmento,
     r.producto,
-    r.familia_producto,
-    r.pd,
     r.grupo,
-    regexp_replace(r.grupo, '_[BMA]$', '') as grupo_base,
-    cast(substr(r.grupo, 2, 1) as int) * 10
-      + case substr(r.grupo, 4, 1)
-          when 'B' then 1
-          when 'M' then 2
-          when 'A' then 3
-          else 0
-        end as grupo_orden,
-    r.modelo
+    regexp_replace(r.grupo, '_[BMA]$', '') as grupo_base
   from largo_raw r
 ),
 
@@ -259,7 +275,8 @@ par as (
     coalesce(d.num_doc,  o.num_doc)          as num_doc,
     coalesce(d.tipo_doc, o.tipo_doc)         as tipo_doc,
     coalesce(d.producto, o.producto)         as producto,
-    coalesce(d.segmento, o.segmento)         as segmento,
+    o.segmento                               as segmento_anterior,
+    d.segmento                               as segmento_actual,
     coalesce(d.idx_mes,  o.idx_mes_destino)  as idx_mes_destino,
     o.grupo_base                             as grupo_base_origen,
     d.grupo_base                             as grupo_base_destino,
@@ -278,7 +295,8 @@ par as (
 clasificado as (
   select
     p.producto,
-    p.segmento,
+    p.segmento_anterior,
+    p.segmento_actual,
     p.idx_mes_destino,
     cast(floor((p.idx_mes_destino - 1) / 12) as smallint) as ingestion_year,
     p.grupo_base_origen,
@@ -302,7 +320,8 @@ clasificado as (
 select
   c.ingestion_year,
   cast(c.idx_mes_destino - 12 * c.ingestion_year as tinyint) as ingestion_month,
-  c.segmento,
+  c.segmento_anterior,
+  c.segmento_actual,
   c.producto,
   c.grupo_base_origen,
   c.grupo_base_destino,
@@ -312,7 +331,8 @@ from clasificado c
 group by
   c.ingestion_year,
   c.idx_mes_destino,
-  c.segmento,
+  c.segmento_anterior,
+  c.segmento_actual,
   c.producto,
   c.grupo_base_origen,
   c.grupo_base_destino,

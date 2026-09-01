@@ -15,6 +15,29 @@
 -- para derivar una columna de otra multiplicaría el punto frágil del repo.
 -- Si alguna vez hay que tocar el mapeo: son tres bloques CASE, ni uno más.
 --
+-- ----------------------------------------------------------------------------
+-- Qué tiene que ser idéntico en las copias, y qué no
+-- ----------------------------------------------------------------------------
+-- **Idéntico: los tres bloques `case p.idx` de `largo_raw`.** Es lo único que
+-- tiene que estar alineado entre copias, y lo que valida
+-- sql/00_perfilado/validacion_mapeo.sql.
+--
+-- **NO idéntico: el CTE `largo`.** Cada consumidor se queda solo con las
+-- columnas derivadas que usa, y las que no usa las omite:
+--
+--   distribucion_grupo.sql   no lleva `largo`: no usa ninguna derivada
+--   cortes_por_producto.sql  no lleva `largo`: ordena por pd_min
+--   validacion_mapeo.sql     no lleva `largo`: solo necesita grupo
+--   migracion.sql            solo `grupo_base`, que es el eje de la matriz
+--
+-- `regexp_replace` y la aritmética de `grupo_orden` corren sobre las ~240 MM
+-- de filas que produce el cross join cada mes. Dejarlas calculadas "por
+-- simetría con el fragmento" cuando nadie las selecciona es trabajo puro de
+-- más: no dar por sentado que el planner las poda.
+--
+-- El filtro de partición también cambia donde hace falta: migracion.sql lo
+-- amplía {REZAGO} meses hacia atrás, y validacion_mapeo.sql usa un solo mes.
+--
 -- producto          = detalle individual, 16 valores.
 -- familia_producto  = agrupación gruesa, 4 valores. Forma jerarquía con
 --                     producto en el tablero (drill down).
