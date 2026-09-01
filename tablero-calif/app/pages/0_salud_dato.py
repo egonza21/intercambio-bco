@@ -48,12 +48,13 @@ if correr_mapeo:
     resultados.append(charts.chequeo_mapeo(data.validacion_mapeo(mes, mes)))
 else:
     resultados.append(charts.Chequeo(
-        "Mapeo idx → columna alineado", True,
-        "No se ejecutó. Es la consulta más lenta de la página: 16 agregados, "
-        "uno por producto, sobre la misma partición. Activala en la barra "
-        "lateral cuando haga falta — conviene correrla después de tocar el "
-        "mapeo o antes de dar por buena una carga nueva.",
-        nota="sin ejecutar"))
+        "Mapeo idx → columna alineado", False,
+        "No se ejecutó, así que sobre el mapeo no hay nada verificado. Es la "
+        "consulta más lenta de la página: 16 agregados, uno por producto, "
+        "sobre la misma partición. Activala en la barra lateral cuando haga "
+        "falta — conviene correrla después de tocar el mapeo o antes de dar "
+        "por buena una carga nueva. El export siempre la ejecuta.",
+        ejecutado=False))
 
 nulos = data.nulos_pd_vs_grupo(desde, hasta)
 resultados.append(charts.chequeo_dominio(
@@ -65,30 +66,19 @@ resultados.append(charts.chequeo_pd_grupo(nulos))
 # ---------------------------------------------------------------------------
 # Panel
 # ---------------------------------------------------------------------------
-fallan = [c for c in resultados if not c.ok]
-if fallan:
-    st.error(
-        f"**{len(fallan)} de {len(resultados)} chequeos piden revisión.** "
-        f"Los números de las otras páginas pueden no significar lo que "
-        f"parecen hasta resolverlos.")
-else:
-    st.success(
-        "**Los cuatro chequeos pasan.** Los supuestos sobre los que se apoya "
-        "el resto del tablero se sostienen en esta ventana.")
+# El estado global cuenta los TRES estados por separado. Solo es verde si los
+# cuatro se ejecutaron y los cuatro pasaron.
+nivel, mensaje, _ = charts.resumen_global(resultados)
+{"alerta": st.error, "aviso": st.warning, "ok": st.success}[nivel](f"**{mensaje}**")
 
 cols = st.columns(len(resultados))
 for col, c in zip(cols, resultados):
-    sin_correr = c.nota == "sin ejecutar"
-    icono = "○" if sin_correr else ("●" if c.ok else "▲")
-    color = (theme.INK_MUTED if sin_correr
-             else (theme.ESTADO_OK if c.ok else theme.ESTADO_CRITICO))
-    etiqueta = "SIN CORRER" if sin_correr else c.estado
     col.markdown(
         f'<div style="background:{theme.SURFACE};border:1px solid {theme.BORDER};'
-        f'border-left:3px solid {color};border-radius:10px;padding:.8rem 1rem;'
+        f'border-left:3px solid {c.color};border-radius:10px;padding:.8rem 1rem;'
         f'height:100%">'
         f'<div style="font-size:.7rem;letter-spacing:.05em;font-weight:600;'
-        f'color:{color}">{icono} {etiqueta}</div>'
+        f'color:{c.color}">{c.icono} {c.estado}</div>'
         f'<div style="font-size:.9rem;font-weight:600;color:{theme.INK};'
         f'margin-top:.25rem;line-height:1.3">{c.nombre}</div></div>',
         unsafe_allow_html=True)
@@ -98,10 +88,10 @@ st.markdown("")
 for c in resultados:
     st.markdown(f"### {c.nombre}")
     st.markdown(f'<p class="sub">{c.resumen}</p>', unsafe_allow_html=True)
-    if c.nota and c.nota != "sin ejecutar":
+    if c.nota:
         st.markdown(f'<p class="nota">{c.nota}</p>', unsafe_allow_html=True)
     # El detalle solo se despliega si el chequeo falla.
-    if not c.ok and c.detalle is not None and not c.detalle.empty:
+    if c.ejecutado and not c.ok and c.detalle is not None and not c.detalle.empty:
         with st.expander(f"Ver el detalle ({len(c.detalle)} filas)"):
             st.dataframe(c.detalle, use_container_width=True, hide_index=True)
             st.download_button(

@@ -650,15 +650,66 @@ def tabla_peores_saltos(df: pd.DataFrame, minimo: int = 3) -> pd.DataFrame:
 
 @dataclass
 class Chequeo:
+    """Resultado de un chequeo. El estado es de TRES valores, no de dos.
+
+    `ejecutado=False` es distinto de `ok=False`: un chequeo que no corrió no
+    afirma nada. Antes esto se marcaba con un centinela en `nota`, que el
+    banner global no miraba, así que un chequeo sin ejecutar contaba como
+    aprobado. Es un campo propio justamente para que no se pueda ignorar.
+    """
     nombre: str
     ok: bool
     resumen: str
     detalle: pd.DataFrame | None = None
     nota: str = ""
+    ejecutado: bool = True
 
     @property
     def estado(self) -> str:
+        if not self.ejecutado:
+            return "SIN EJECUTAR"
         return "OK" if self.ok else "REVISAR"
+
+    @property
+    def color(self) -> str:
+        if not self.ejecutado:
+            return theme.INK_MUTED
+        return theme.ESTADO_OK if self.ok else theme.ESTADO_CRITICO
+
+    @property
+    def icono(self) -> str:
+        if not self.ejecutado:
+            return "○"
+        return "●" if self.ok else "▲"
+
+
+def resumen_global(chequeos: list[Chequeo]) -> tuple[str, str, bool]:
+    """Cuenta los tres estados por separado y arma el mensaje del banner.
+
+    Devuelve (nivel, mensaje, todo_verde). El nivel es 'ok', 'alerta' o
+    'aviso'. **Solo es verde si los cuatro se ejecutaron y los cuatro
+    pasaron**: un archivo que afirma que todo está bien sin haber corrido un
+    chequeo está diciendo algo que no verificó.
+    """
+    total = len(chequeos)
+    fallan = [c for c in chequeos if c.ejecutado and not c.ok]
+    sin_correr = [c for c in chequeos if not c.ejecutado]
+    pasan = total - len(fallan) - len(sin_correr)
+
+    if fallan:
+        partes = [f"{len(fallan)} de {total} chequeos piden revisión"]
+        if sin_correr:
+            partes.append(f"{len(sin_correr)} sin ejecutar")
+        return ("alerta", ", ".join(partes) + ". Los números de las otras "
+                "páginas pueden no significar lo que parecen.", False)
+    if sin_correr:
+        return ("aviso",
+                f"{pasan} de {total} chequeos pasan, {len(sin_correr)} sin "
+                f"ejecutar ({', '.join(c.nombre for c in sin_correr)}). "
+                f"Mientras no corra, no hay nada verificado sobre ese punto.",
+                False)
+    return ("ok", f"Los {total} chequeos pasan. Los supuestos sobre los que se "
+            f"apoya el resto del tablero se sostienen en esta ventana.", True)
 
 
 def chequeo_ingestion_day(df: pd.DataFrame) -> Chequeo:
@@ -805,34 +856,57 @@ def discordancia_pd_grupo(df: pd.DataFrame) -> go.Figure:
 
     Es el único de los cuatro chequeos donde la tendencia dice algo: los otros
     tres son binarios. Si esta línea sube, la replicación de PD se degrada.
+
+    Va SIEMPRE abierto por producto, nunca agregado en una sola serie. Hoy la
+    discordancia está concentrada en un producto: si mañana aparece en otro, un
+    total agregado podría no moverse lo suficiente para que se note, que es
+    justo el caso que este gráfico existe para detectar.
+
+    Solo entran los productos con algún valor distinto de cero en la ventana.
+    Los que están en cero todo el tiempo quedan fuera de la leyenda, para que
+    el gráfico no se llene de líneas planas donde no hay nada que mirar.
     """
     if df.empty:
         return _sin_datos()
-    g = df[df["pd_nulo_grupo_no_nulo"] > 0]
-    if g.empty:
-        return _sin_datos("ningún producto con PD nula y grupo poblado")
-    meses = sorted(g["idx_mes"].unique())
+    meses = sorted(df["idx_mes"].unique())
     etiquetas = [theme.etiqueta_mes_idx(m) for m in meses]
-    top = (g.groupby("producto")["pd_nulo_grupo_no_nulo"].sum()
-           .sort_values(ascending=False))
-    principales, resto = top.index.tolist()[:4], top.index.tolist()[4:]
 
+    # Productos con discordancia en ALGÚN mes. El filtro es sobre el total de
+    # la ventana, no fila a fila: así un producto que tiene meses en cero
+    # conserva esos ceros en su línea, en vez de quedar con huecos.
+    total = (df.groupby("producto")["pd_nulo_grupo_no_nulo"].sum()
+             .sort_values(ascending=False))
+    activos = total[total > 0].index.tolist()
+    if not activos:
+        return _sin_datos("ningún producto con PD nula y grupo poblado "
+                          "en esta ventana")
+
+    principales, resto = activos[:4], activos[4:]
     fig = go.Figure()
     for i, prod in enumerate(principales):
-        s = (g[g["producto"] == prod].groupby("idx_mes")["pd_nulo_grupo_no_nulo"]
-             .sum().reindex(meses))
+        s = (df[df["producto"] == prod].groupby("idx_mes")["pd_nulo_grupo_no_nulo"]
+             .sum().reindex(meses).fillna(0))
         fig.add_scatter(
             x=etiquetas, y=s.values, name=prod, mode="lines+markers",
             line=dict(color=theme.SERIES[i], width=2, dash=theme.SERIES_DASH[i]),
             marker=dict(size=7, line=dict(color=theme.SURFACE, width=2)),
             hovertemplate=prod + " · %{y:,.0f} filas<extra></extra>")
     if resto:
-        s = (g[g["producto"].isin(resto)].groupby("idx_mes")["pd_nulo_grupo_no_nulo"]
-             .sum().reindex(meses))
-        fig.add_scatter(x=etiquetas, y=s.values, name=f"otros ({len(resto)})",
-                        mode="lines", line=dict(color=theme.INK_MUTED, width=1.5,
-                                                dash="dot"),
+        # Más de cuatro productos con discordancia ya es de por sí una señal:
+        # se agregan para no salir de la paleta, pero el gráfico lo dice.
+        s = (df[df["producto"].isin(resto)].groupby("idx_mes")["pd_nulo_grupo_no_nulo"]
+             .sum().reindex(meses).fillna(0))
+        fig.add_scatter(x=etiquetas, y=s.values,
+                        name=f"otros {len(resto)} productos", mode="lines",
+                        line=dict(color=theme.INK_MUTED, width=1.5, dash="dot"),
                         hovertemplate="otros · %{y:,.0f} filas<extra></extra>")
+        fig.add_annotation(
+            x=0, y=-0.22, xref="paper", yref="paper", xanchor="left",
+            showarrow=False,
+            text=f"Hay {len(activos)} productos con discordancia: "
+                 f"{len(resto)} van agregados en «otros».",
+            font=dict(size=11, color=theme.ESTADO_ALERTA, family=theme.FONT))
+
     fig.update_layout(height=360)
     fig.update_xaxes(title_text="")
     fig.update_yaxes(title_text="Filas con PD nula y grupo poblado",

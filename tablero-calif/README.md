@@ -46,8 +46,12 @@ embebido en el propio archivo porque la red del banco puede no alcanzar el CDN.
 
 El HTML arranca con la sección de **salud del dato**, con el estado de los
 cuatro chequeos al momento de generarlo: quien abra el reporte sabe si los
-números que va a mirar son confiables antes de mirarlos. Con `--sin-mapeo` se
-omite la validación del mapeo, que es la consulta más lenta.
+números que va a mirar son confiables antes de mirarlos.
+
+El export **siempre ejecuta los cuatro chequeos**, incluido el de mapeo, sin
+importar lo que esté tildado en la app. Un archivo que afirma que todo está
+bien sin haber corrido un chequeo está diciendo algo que no verificó, y el
+export se genera una vez al mes: la lentitud ahí no importa.
 
 > **Los HTML contienen datos.** Son agregados, pero son datos igual. `exportes/`
 > está en `.gitignore` y así tiene que quedar: el repo es solo código (ver
@@ -134,7 +138,9 @@ está en rojo, los números de las otras páginas no significan lo que parecen.
    cliente y mes; sin eso cada `count(*)` duplica en silencio.
 2. **Mapeo `idx` → columna alineado** — un `CASE` desalineado no da error,
    solo etiqueta mal. Es la consulta más lenta (16 agregados sobre la misma
-   partición), así que viene desactivada y se corre sobre un mes.
+   partición), así que en la app viene desactivada y se corre sobre un mes.
+   Mientras esté apagada la tarjeta dice **SIN EJECUTAR**, no verde, y el
+   estado global no puede ser verde: un chequeo que no corrió no afirma nada.
 3. **Dominio de grupos y modelos sin novedades** — un grupo fuera de G1–G8 y
    las aperturas de sufi, o un modelo fuera de los ocho conocidos. Un modelo
    nuevo no es un error: es una novedad. Si viene en escala de puntaje hay que

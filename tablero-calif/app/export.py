@@ -150,14 +150,9 @@ class Doc:
         """Estado de los chequeos de salud, en tarjetas con borde de color."""
         celdas = []
         for c in chequeos:
-            sin_correr = c.nota == "sin ejecutar"
-            color = (theme.INK_MUTED if sin_correr
-                     else (theme.ESTADO_OK if c.ok else theme.ESTADO_CRITICO))
-            icono = "○" if sin_correr else ("●" if c.ok else "▲")
-            etiqueta = "SIN CORRER" if sin_correr else c.estado
             celdas.append(
-                f'<div class="chk" style="border-left-color:{color}">'
-                f'<div class="chk-est" style="color:{color}">{icono} {etiqueta}</div>'
+                f'<div class="chk" style="border-left-color:{c.color}">'
+                f'<div class="chk-est" style="color:{c.color}">{c.icono} {c.estado}</div>'
                 f'<div class="chk-nom">{c.nombre}</div>'
                 f'<div class="chk-res">{c.resumen}</div></div>')
         self.partes.append(f'<div class="chks">{"".join(celdas)}</div>')
@@ -201,45 +196,41 @@ class Doc:
             "</div></body></html>")
 
 
-def construir(desde: int, hasta: int, mes: int, rezago: int,
-              con_mapeo: bool = True) -> str:
+def construir(desde: int, hasta: int, mes: int, rezago: int) -> str:
     doc = Doc()
 
     # --- 0. Salud del dato -------------------------------------------------
     # Va PRIMERO: el que abre el reporte tiene que saber si los números que va
     # a mirar son confiables antes de mirarlos.
+    # El export SIEMPRE corre los cuatro, incluido el de mapeo, sin importar
+    # lo que tenga tildado la UI: un archivo que afirma que todo está bien sin
+    # haber corrido un chequeo está diciendo algo que no verificó. Se genera
+    # una vez al mes, así que la lentitud acá no importa.
     nulos = data.nulos_pd_vs_grupo(desde, hasta)
-    chequeos = [charts.chequeo_ingestion_day(data.duplicados_ingestion_day(desde, hasta))]
-    if con_mapeo:
+    chequeos = [
+        charts.chequeo_ingestion_day(data.duplicados_ingestion_day(desde, hasta)),
         # Sobre un solo mes: el costo se multiplica por la cantidad de meses.
-        chequeos.append(charts.chequeo_mapeo(data.validacion_mapeo(mes, mes)))
-    else:
-        chequeos.append(charts.Chequeo(
-            "Mapeo idx → columna alineado", True,
-            "No se ejecutó al generar este archivo.", nota="sin ejecutar"))
+        charts.chequeo_mapeo(data.validacion_mapeo(mes, mes)),
+    ]
     chequeos.append(charts.chequeo_dominio(
         data.dominio_grupos(desde, hasta), data.escala_modelos(desde, hasta),
         data.MODELOS_CONOCIDOS))
     chequeos.append(charts.chequeo_pd_grupo(nulos))
 
-    fallan = [c for c in chequeos if not c.ok]
+    fallan = [c for c in chequeos if c.ejecutado and not c.ok]
+    nivel, mensaje, _ = charts.resumen_global(chequeos)
     doc.seccion("salud", "Salud del dato",
                 "Estado de los chequeos de sql/00_perfilado/ al momento de "
                 "generar este archivo. Son los supuestos sobre los que se "
                 "apoya todo lo que sigue.")
-    if fallan:
-        doc.partes.append(
-            f'<div class="banda" style="background:#fdeceb;'
-            f'border:1px solid {theme.ESTADO_CRITICO};color:#7d1f1f">'
-            f'<b>{len(fallan)} de {len(chequeos)} chequeos piden revisión.</b> '
-            f'Los números de las secciones siguientes pueden no significar lo '
-            f'que parecen hasta resolverlos.</div>')
-    else:
-        doc.partes.append(
-            f'<div class="banda" style="background:#e9f7e9;'
-            f'border:1px solid {theme.ESTADO_OK};color:#0b5c0b">'
-            f'<b>Los {len(chequeos)} chequeos pasan.</b> Los supuestos del '
-            f'tablero se sostienen en esta ventana.</div>')
+    fondo, borde, tinta = {
+        "ok":     ("#e9f7e9", theme.ESTADO_OK, "#0b5c0b"),
+        "aviso":  ("#fdf5e3", theme.ESTADO_ALERTA, "#7a5800"),
+        "alerta": ("#fdeceb", theme.ESTADO_CRITICO, "#7d1f1f"),
+    }[nivel]
+    doc.partes.append(
+        f'<div class="banda" style="background:{fondo};border:1px solid {borde};'
+        f'color:{tinta}"><b>{mensaje}</b></div>')
     doc.semaforo(chequeos)
     for c in fallan:
         if c.detalle is not None and not c.detalle.empty:
@@ -369,9 +360,6 @@ def main() -> int:
     p.add_argument("--hasta", type=int, default=202608, help="mes final, YYYYMM")
     p.add_argument("--mes", type=int, default=None, help="mes de corte, YYYYMM")
     p.add_argument("--rezago", type=int, default=1, choices=[1, 6])
-    p.add_argument("--sin-mapeo", action="store_true",
-                   help="omite la validación del mapeo, que es la consulta "
-                        "más lenta (16 agregados sobre la misma partición)")
     p.add_argument("--salida", type=Path, default=None)
     a = p.parse_args()
 
@@ -381,7 +369,7 @@ def main() -> int:
     desde, hasta = a_idx(a.desde), a_idx(a.hasta)
     mes = a_idx(a.mes) if a.mes else hasta
 
-    html = construir(desde, hasta, mes, a.rezago, con_mapeo=not a.sin_mapeo)
+    html = construir(desde, hasta, mes, a.rezago)
 
     DIR_SALIDA.mkdir(exist_ok=True)
     destino = a.salida or (DIR_SALIDA /
