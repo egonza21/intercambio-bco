@@ -1,0 +1,21 @@
+# Tema propio, no el default de Streamlit. Los valores son los mismos de
+# app/theme.py: si cambia uno, cambian los dos.
+
+[theme]
+base = "light"
+primaryColor = "#2a78d6"           # slot 1 de la paleta categórica
+backgroundColor = "#f7f7f5"        # plano de la página
+secondaryBackgroundColor = "#fcfcfb"  # superficie de tarjetas y barra lateral
+textColor = "#0b0b0b"              # tinta primaria
+font = "sans serif"
+
+[server]
+headless = true
+runOnSave = true
+
+[browser]
+gatherUsageStats = false
+
+[client]
+toolbarMode = "minimal"
+showErrorDetails = true

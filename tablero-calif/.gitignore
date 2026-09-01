@@ -1,0 +1,22 @@
+# ============================================================================
+# El repo es SOLO CODIGO. Ver CLAUDE.md, "Restricciones del entorno":
+# "El repo no contiene datos. Ni resultados, ni muestras, ni extractos, ni
+# conteos reales."
+#
+# Los HTML que genera app/export.py CONTIENEN DATOS -- son agregados, pero
+# son datos igual: conteos por segmento, distribuciones de PD, fronteras de
+# corte. No pueden entrar al repo.
+# ============================================================================
+
+exportes/
+*.html
+
+# Artefactos de Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+
+# Streamlit
+.streamlit/secrets.toml
