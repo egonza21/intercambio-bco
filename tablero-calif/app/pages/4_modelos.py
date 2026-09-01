@@ -24,8 +24,17 @@ st.markdown(
     'del producto son los <b>cortes</b> que la traducen a grupo.</p>',
     unsafe_allow_html=True)
 
-pdm = data.pd_por_modelo(desde, hasta)
-cortes = data.cortes_por_producto(desde, hasta)
+
+# Los agregados llegan ENTEROS desde la capa construida. El recorte de la
+# ventana se hace acá, en pandas: es instantáneo y no vuelve a Impala.
+def _ventana(df):
+    if df.empty or "idx_mes" not in df.columns:
+        return df
+    return df[df["idx_mes"].between(desde, hasta)]
+
+
+pdm = _ventana(data.pd_por_modelo())
+cortes = _ventana(data.cortes_por_producto())
 
 with st.sidebar:
     st.markdown("## Filtros de la página")

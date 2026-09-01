@@ -21,8 +21,17 @@ st.markdown(
     f'la caída de la base se mira aparte, porque una cosa explica la otra.</p>',
     unsafe_allow_html=True)
 
-dist = data.distribucion_grupo(desde, hasta)
-base = data.base_clientes(desde, hasta)
+
+# Los agregados llegan ENTEROS desde la capa construida. El recorte de la
+# ventana se hace acá, en pandas: es instantáneo y no vuelve a Impala.
+def _ventana(df):
+    if df.empty or "idx_mes" not in df.columns:
+        return df
+    return df[df["idx_mes"].between(desde, hasta)]
+
+
+dist = _ventana(data.distribucion_grupo())
+base = _ventana(data.base_clientes())
 
 with st.sidebar:
     st.markdown("## Filtros de la página")

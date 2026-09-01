@@ -35,11 +35,22 @@ def _sin_datos(msg: str = VACIO) -> go.Figure:
 # PANORAMA
 # ===========================================================================
 
-def composicion_grupo(df: pd.DataFrame, familia: str | None = None) -> go.Figure:
+def _grupos_ordenados(valores) -> list[str]:
+    """Los grupos presentes, ordenados por grupo_orden. Nunca por el orden en
+    que llegaron los datos ni alfabéticamente: G7_A iría antes que G7_B."""
+    return sorted(set(valores), key=lambda g: theme.GRUPO_ORDEN.get(g, 999))
+
+
+def composicion_grupo(df: pd.DataFrame, familia: str | None = None,
+                      orden_productos: list[str] | None = None) -> go.Figure:
     """Composición de grupo por producto, barra apilada 100%.
 
     Apilada por grupo_orden ascendente: la barra lee de menor a mayor riesgo de
     izquierda a derecha, y el gradiente de la rampa hace de leyenda.
+
+    `orden_productos` fija el eje explícitamente. Sirve para el comparador de
+    dos meses: si cada panel ordena por sus propios datos, un producto cambia
+    de fila entre meses y la comparación visual deja de servir.
     """
     if df.empty:
         return _sin_datos()
@@ -52,14 +63,18 @@ def composicion_grupo(df: pd.DataFrame, familia: str | None = None) -> go.Figure
     piv = (d.groupby(["producto", "grupo", "grupo_orden"], as_index=False)["clientes"].sum())
     tot = piv.groupby("producto")["clientes"].transform("sum")
     piv["share"] = piv["clientes"] / tot
-    # Productos ordenados por su masa en los grupos peores: el ojo baja por
-    # una lista que ya está rankeada por riesgo, no por alfabeto.
-    peor = (piv[piv["grupo_orden"] >= 60].groupby("producto")["share"].sum()
-            .reindex(piv["producto"].unique()).fillna(0).sort_values())
-    orden_prod = peor.index.tolist()
+    if orden_productos is not None:
+        presentes = set(piv["producto"])
+        orden_prod = [p for p in orden_productos if p in presentes]
+    else:
+        # Productos ordenados por su masa en los grupos peores: el ojo baja por
+        # una lista que ya está rankeada por riesgo, no por alfabeto.
+        peor = (piv[piv["grupo_orden"] >= 60].groupby("producto")["share"].sum()
+                .reindex(piv["producto"].unique()).fillna(0).sort_values())
+        orden_prod = peor.index.tolist()
 
     fig = go.Figure()
-    for grupo in sorted(piv["grupo"].unique(), key=lambda g: theme.GRUPO_ORDEN.get(g, 0)):
+    for grupo in _grupos_ordenados(piv["grupo"]):
         s = piv[piv["grupo"] == grupo].set_index("producto").reindex(orden_prod)
         fig.add_bar(
             y=orden_prod, x=s["share"].values, name=grupo, orientation="h",
@@ -70,15 +85,31 @@ def composicion_grupo(df: pd.DataFrame, familia: str | None = None) -> go.Figure
                            "<br>%{x:.1%} de la cartera del producto"
                            "<br>%{customdata[0]:,.0f} clientes<extra></extra>"),
         )
-    fig.update_layout(barmode="stack", height=max(360, 34 * len(orden_prod) + 130))
+    # traceorder normal: la leyenda sigue el orden de apilado (G1 primero), no
+    # el invertido que Plotly usa por defecto en barras apiladas.
+    fig.update_layout(barmode="stack", legend_traceorder="normal",
+                      height=max(360, 34 * len(orden_prod) + 130))
     fig.update_xaxes(title_text="Participación en la cartera del producto",
                      tickformat=".0%", range=[0, 1])
-    fig.update_yaxes(title_text="")
+    # categoryorder explícito: el eje NO se ordena por los datos.
+    fig.update_yaxes(title_text="", categoryorder="array",
+                     categoryarray=list(reversed(orden_prod)))
     return _t(fig)
 
 
-def heatmap_segmento_grupo(df: pd.DataFrame, producto: str | None = None) -> go.Figure:
-    """Segmento × grupo, en participación por fila (cada segmento suma 100%)."""
+def heatmap_segmento_grupo(df: pd.DataFrame, producto: str | None = None,
+                           normalizar: bool = True) -> go.Figure:
+    """Segmento × grupo.
+
+    Con `normalizar=True` (el default) cada FILA suma 100% y el color dice el
+    porcentaje dentro de ese segmento. Es lo que hace falta para comparar: sin
+    normalizar, los segmentos grandes se llevan todo el color y los chicos se
+    ven vacíos, aunque su reparto interno sea peor.
+
+    Con `normalizar=False` el color es el conteo absoluto, para cuando la
+    pregunta es de volumen y no de reparto. El otro valor viaja siempre en el
+    hover, así que no hay que cambiar de vista para leerlo.
+    """
     if df.empty:
         return _sin_datos()
     d = df if not producto or producto == "todos" else df[df["producto"] == producto]
@@ -87,24 +118,38 @@ def heatmap_segmento_grupo(df: pd.DataFrame, producto: str | None = None) -> go.
 
     g = d.groupby(["segmento", "grupo"], as_index=False)["clientes"].sum()
     g["share"] = g["clientes"] / g.groupby("segmento")["clientes"].transform("sum")
-    cols = sorted(g["grupo"].unique(), key=lambda x: theme.GRUPO_ORDEN.get(x, 0))
+    cols = _grupos_ordenados(g["grupo"])
     piv = g.pivot(index="segmento", columns="grupo", values="share").reindex(columns=cols)
     cnt = g.pivot(index="segmento", columns="grupo", values="clientes").reindex(columns=cols)
+    # Segmentos por tamaño: el más grande arriba, para que la lectura no
+    # dependa del alfabeto.
+    orden_seg = (g.groupby("segmento")["clientes"].sum().sort_values(ascending=False)
+                 .index.tolist())
+    piv, cnt = piv.reindex(orden_seg), cnt.reindex(orden_seg)
+
+    if normalizar:
+        z, extra, fmt, titulo = piv.values, cnt.values, ".0%", "% del<br>segmento"
+        linea_z = "%{z:.1%} del segmento<br>%{customdata:,.0f} clientes"
+    else:
+        z, extra, fmt, titulo = cnt.values, piv.values, ",.0f", "clientes"
+        linea_z = "%{z:,.0f} clientes<br>%{customdata:.1%} del segmento"
 
     fig = go.Figure(go.Heatmap(
-        z=piv.values, x=cols, y=piv.index.tolist(),
+        z=z, x=cols, y=piv.index.tolist(),
         colorscale=theme.ESCALA_SECUENCIAL, zmin=0,
-        xgap=2, ygap=2,
-        customdata=cnt.values,
-        colorbar=dict(title=dict(text="% del<br>segmento", font=dict(size=11)),
-                      tickformat=".0%", thickness=12, len=0.75, outlinewidth=0),
-        hovertemplate=("Segmento <b>%{y}</b> · grupo <b>%{x}</b>"
-                       "<br>%{z:.1%} del segmento"
-                       "<br>%{customdata:,.0f} clientes<extra></extra>"),
+        xgap=2, ygap=2, customdata=extra,
+        colorbar=dict(title=dict(text=titulo, font=dict(size=11)),
+                      tickformat=fmt, thickness=12, len=0.75, outlinewidth=0),
+        hovertemplate=("Segmento <b>%{y}</b> · grupo <b>%{x}</b><br>"
+                       + linea_z + "<extra></extra>"),
     ))
     fig.update_layout(height=max(320, 40 * len(piv.index) + 150))
-    fig.update_xaxes(title_text="Grupo de riesgo", showline=False, ticks="")
-    fig.update_yaxes(title_text="", showgrid=False, showline=False, ticks="")
+    # categoryorder explícito en los dos ejes: ni el grupo ni el segmento se
+    # ordenan por el orden en que llegan los datos.
+    fig.update_xaxes(title_text="Grupo de riesgo", showline=False, ticks="",
+                     categoryorder="array", categoryarray=cols)
+    fig.update_yaxes(title_text="", showgrid=False, showline=False, ticks="",
+                     categoryorder="array", categoryarray=list(reversed(orden_seg)))
     return _t(fig)
 
 
@@ -166,7 +211,7 @@ def mezcla_riesgo(df: pd.DataFrame, producto: str) -> go.Figure:
     etiquetas = [theme.etiqueta_mes_idx(m) for m in meses]
 
     fig = go.Figure()
-    for grupo in sorted(g["grupo"].unique(), key=lambda x: theme.GRUPO_ORDEN.get(x, 0)):
+    for grupo in _grupos_ordenados(g["grupo"]):
         s = g[g["grupo"] == grupo].set_index("idx_mes").reindex(meses)
         fig.add_scatter(
             x=etiquetas, y=s["share"].values, name=grupo,
@@ -175,8 +220,9 @@ def mezcla_riesgo(df: pd.DataFrame, producto: str) -> go.Figure:
             fillcolor=theme.COLOR_GRUPO.get(grupo, theme.INK_MUTED),
             hovertemplate=grupo + " · %{y:.1%}<extra></extra>",
         )
-    fig.update_layout(height=430)
-    fig.update_xaxes(title_text="")
+    # traceorder normal: la leyenda sigue el orden de apilado (G1 abajo).
+    fig.update_layout(height=430, legend_traceorder="normal")
+    fig.update_xaxes(title_text="", categoryorder="array", categoryarray=etiquetas)
     fig.update_yaxes(title_text="Participación de la cartera", tickformat=".0%",
                      range=[0, 1])
     return _t(fig, unified=True)
@@ -592,7 +638,8 @@ def sensibilidad_cortes(df: pd.DataFrame, modelo: str | None = None) -> go.Figur
                            "<extra></extra>"),
         )
 
-    fig.update_layout(height=max(420, 30 * len(productos) + 170))
+    fig.update_layout(height=max(420, 30 * len(productos) + 170),
+                      legend_traceorder="normal")
     fig.update_xaxes(title_text="Probabilidad de default — escala logarítmica", type="log")
     fig.update_yaxes(title_text="", tickmode="array",
                      tickvals=list(ypos.values()), ticktext=list(ypos.keys()),

@@ -10,6 +10,35 @@ los modelos de calificación de clientes.
 - `powerbi/notas_modelo.md` — notas del modelo de Power BI, que consume los
   mismos agregados.
 
+## Construir las tablas
+
+**Se corre una vez al mes**, cuando llega la partición nueva. Antes de la app:
+si las tablas no existen, la app no arranca.
+
+```bash
+# en orden; el prefijo numérico ES el orden
+for f in sql/20_construccion/*.sql; do
+    echo "== $f"
+    impala-shell -f "$f"      # o el cliente que uses
+done
+```
+
+Cada script son **tres sentencias** (`drop`, `create table as`,
+`compute stats`). Si el cliente no acepta varias por llamada, hay que
+separarlas por `;` y ejecutarlas en secuencia — `impala-shell -f` lo hace solo.
+
+`01_largo_calificaciones` tiene que existir antes que los cuatro scripts que
+leen de ella. El detalle de dependencias está en
+`sql/20_construccion/00_orden.md`.
+
+> **La construcción no es concurrente.** El `drop`+`create` deja cada tabla
+> inexistente mientras dura: si otra persona construye a la vez, o alguien
+> tiene la app abierta y fuerza una relectura, se rompe. Es un proceso manual
+> y coordinado.
+
+Después de construir, abrir la página **Salud del dato** y activar el chequeo
+de mapeo: es la única defensa contra un `CASE` desalineado, que no da error.
+
 ## Correr la app
 
 ```bash
@@ -79,16 +108,26 @@ pinta.** `main.py` las pasa a `st.plotly_chart`; `export.py` las pasa a
 distinto de la app, es un bug de `charts.py`, no de dos implementaciones que se
 separaron.
 
-### El SQL no se reescribe
+### Dos capas de SQL
 
-`data.py` lee los `.sql` de `sql/10_agregados/` tal como están y solo
-reemplaza los marcadores `{DESDE}`, `{HASTA}` y `{REZAGO}` por el formato de
-parámetros del helper. Esas consultas llevan documentado el porqué de cada
-decisión; duplicarlas en Python sería crear una segunda fuente de verdad.
+`sql/20_construccion/` crea las tablas, una vez al mes y **sin parámetros**.
+`sql/30_lectura/` son SELECT sin filtros sobre esas tablas, y es lo único que
+llama la app.
 
-Los valores de mes se calculan como `year * 12 + month` y se fuerzan a `int`
-antes de formatearlos, así un selector de fecha no puede meter texto arbitrario
-en la consulta. El porqué del `12` y no `100` está en `CLAUDE.md`.
+`data.py` lee los `.sql` de `30_lectura/` tal como están, sin sustituir nada:
+trae cada tabla entera y **filtra en pandas**. Son decenas de miles de filas,
+así que `st.cache_data` cachea una vez y mover un selector del sidebar es
+instantáneo porque no vuelve a Impala.
+
+La excepción son las consultas de `00_perfilado/`, que sí van directo contra la
+tabla fuente y con parámetros: son diagnósticas, se corren cuando hacen falta,
+y la de mapeo se ejecuta deliberadamente sobre un solo mes. Ahí los valores de
+mes se calculan como `year * 12 + month` y se fuerzan a `int` antes de
+formatearlos, así un selector no puede meter texto arbitrario en la consulta.
+El porqué del `12` y no `100` está en `CLAUDE.md`.
+
+`sql/10_agregados/` queda como histórico: es la versión parametrizada de
+cuando no había permisos de escritura. La app ya no la usa.
 
 ### Decisiones de color
 
@@ -97,11 +136,15 @@ de visualización (banda de luminosidad OKLCH, piso de croma, separación bajo
 simulación de daltonismo, piso de visión normal y contraste contra la
 superficie). Las cifras de cada check están anotadas en `theme.py`.
 
-- **G1–G8 es una escala ordinal**, así que va en una rampa secuencial de un
-  solo tono, clara a oscura, nunca en colores categóricos: con colores no
-  relacionados se pierde la lectura de gradiente. Las aperturas de sufi
-  (`G7_B/M/A`) caen en tonos contiguos dentro del tramo de su grupo base, por
-  construcción — el color sale de `grupo_orden`.
+- **G1–G8 es una escala ordinal**, así que va en una rampa secuencial y nunca
+  en colores categóricos sueltos. La rampa recorre **verde → ámbar → rojo** con
+  croma moderado, y la luminosidad baja de forma monótona a lo largo de los
+  ocho pasos. Que el gradiente lo lleven tono y luminosidad a la vez es lo que
+  hace que la escala sobreviva cuando el tono se pierde: en blanco y negro
+  queda el span de L, y bajo daltonismo la separación entre pasos contiguos
+  queda mejor que con una rampa de un solo tono. Las aperturas de sufi
+  (`G7_B/M/A`) se interpolan dentro del tramo de su grupo base, así que leen
+  como subdivisiones y no como grupos nuevos.
 - **La matriz de migración usa una paleta divergente centrada en la diagonal.**
   El tono dice la dirección (azul mejora, rojo deterioro) y la intensidad el
   volumen. La diagonal queda neutra sin importar su masa: es estabilidad, no

@@ -45,23 +45,43 @@ GRUPOS_BASE_ORDENADOS = ["G1", "G2", "G3", "G4", "G5", "G6", "G7", "G8"]
 _ORDEN_MIN, _ORDEN_MAX = 10, 83
 
 # ---------------------------------------------------------------------------
-# Rampa ordinal de riesgo -- un solo tono, claro (G1) a oscuro (G8)
+# Rampa ordinal de riesgo -- MULTI-TONO: verde (G1) a rojo (G8)
 # ---------------------------------------------------------------------------
-# G1-G8 es una escala ORDINAL: la lectura correcta es de gradiente, así que va
-# en un solo tono y nunca en colores categóricos. Los paradas son la rampa azul
-# de la guía, extendida un paso hacia el extremo oscuro (#082852): la rampa
-# documentada llega hasta L=0.338 y ocho niveles con separación mínima de
-# dL=0.06 necesitan un span de 0.42, que no entraba por 0.006 una vez
-# redondeado a sRGB.
+# G1-G8 es una escala ORDINAL, así que tiene que leerse como gradiente. La
+# primera versión fue monocromática (un solo tono azul, claro a oscuro), que es
+# lo que la guía de visualización pide para una secuencial. En la práctica no
+# funcionó: en las LÍNEAS de la página de evolución, ocho azules a dL=0.06 son
+# indistinguibles entre sí.
 #
-# Validado como rampa ordinal en superficie clara:
-#   Lightness monotone  PASS   Adjacent dL       PASS (todos >= 0.06)
-#   Light-end contrast  PASS   (#86b6ef, 2.06:1, sobre el piso de 2:1)
-#   Single hue          PASS   (spread 4°)
-_RAMPA_STOPS = [
-    (0.764, "#86b6ef"), (0.717, "#6da7ec"), (0.671, "#5598e7"), (0.622, "#3987e5"),
-    (0.575, "#2a78d6"), (0.527, "#256abf"), (0.480, "#1c5cab"), (0.433, "#184f95"),
-    (0.385, "#104281"), (0.338, "#0d366b"), (0.281, "#082852"),
+# Esta rampa recorre verde -> ámbar -> rojo, con croma moderado (0.10-0.12:
+# tonos sobrios, no primarios). El tono da la diferencia entre series; la
+# LUMINOSIDAD, que baja de forma monótona de 0.753 a 0.299, da el orden.
+#
+# Que el gradiente lo lleven las dos cosas a la vez no es decorativo: es lo que
+# hace que la escala sobreviva cuando el tono se pierde. En escala de grises o
+# impreso queda el span de L de 0.454, y bajo daltonismo la separación adyacente
+# (dE 6.4 a 8.4 protan/deutan) queda MEJOR que en la versión monocromática,
+# justamente porque no depende solo del tono.
+#
+# Validada con los checks ordinales en superficie clara:
+#   Lightness monotone  PASS   (0.753 -> 0.299, siempre descendente)
+#   Adjacent dL         PASS   (todos los gaps >= 0.06)
+#   Light-end contrast  PASS   (#7ac28e, 2.06:1, sobre el piso de 2:1)
+#   Single hue          FAIL   (spread 135°) <- ES EL OVERRIDE DELIBERADO.
+#
+# El FAIL de "single hue" está asumido y documentado: es el precio de que las
+# ocho series se distingan. No es un descuido, y no hay que "arreglarlo"
+# volviendo a un solo tono sin resolver antes el problema de las líneas.
+_RAMPA_G = [
+    "#7ac28e",  # G1  L 0.753
+    "#80a961",  # G2  L 0.687
+    "#878d36",  # G3  L 0.620
+    "#8a7101",  # G4  L 0.556
+    "#875400",  # G5  L 0.492
+    "#7e3800",  # G6  L 0.428
+    "#6f1b02",  # G7  L 0.360
+    "#5b0016",  # G8  L 0.299
+    "#43000f",  # ancla virtual: solo para interpolar las aperturas de G8
 ]
 
 
@@ -99,35 +119,65 @@ def _oklab_a_hex(L: float, a: float, b: float) -> str:
     return "#%02x%02x%02x" % tuple(out)
 
 
+def _mezcla(h0: str, h1: str, f: float) -> str:
+    """Interpola en OKLab, que es donde la mezcla de dos colores se ve
+    uniforme (en sRGB directo, el punto medio sale sucio)."""
+    l0, a0, b0 = _oklab(h0)
+    l1, a1, b1 = _oklab(h1)
+    return _oklab_a_hex(l0 + f * (l1 - l0), a0 + f * (a1 - a0), b0 + f * (b1 - b0))
+
+
 def _rampa(t: float) -> str:
-    """t en [0,1]: 0 = extremo claro (menor riesgo), 1 = oscuro (mayor)."""
-    t = min(1.0, max(0.0, t))
-    objetivo = _RAMPA_STOPS[0][0] + t * (_RAMPA_STOPS[-1][0] - _RAMPA_STOPS[0][0])
-    for i in range(len(_RAMPA_STOPS) - 1):
-        l0, h0 = _RAMPA_STOPS[i]
-        l1, h1 = _RAMPA_STOPS[i + 1]
-        if l1 - 1e-9 <= objetivo <= l0 + 1e-9:
-            f = 0.0 if l0 == l1 else (l0 - objetivo) / (l0 - l1)
-            _, a0, b0 = _oklab(h0)
-            _, a1, b1 = _oklab(h1)
-            return _oklab_a_hex(objetivo, a0 + f * (a1 - a0), b0 + f * (b1 - b0))
-    return _RAMPA_STOPS[-1][1]
+    """t en [0,1]: 0 = menor riesgo (verde claro), 1 = mayor (rojo oscuro).
+    Solo recorre las ocho anclas reales, no el ancla virtual."""
+    t = min(1.0, max(0.0, t)) * 7
+    i = min(6, int(t))
+    return _mezcla(_RAMPA_G[i], _RAMPA_G[i + 1], t - i)
 
 
 def color_grupo(grupo: str) -> str:
-    """Color de un grupo por su posición ordinal. Las aperturas de sufi caen en
-    tonos contiguos dentro del tramo de su grupo base, por construcción."""
+    """Color de un grupo por su posición ordinal.
+
+    Los grupos planos G1-G8 caen exactamente sobre las ocho anclas. Las
+    aperturas de sufi se interpolan DENTRO del tramo de su grupo base: G7_B,
+    G7_M y G7_A quedan a un cuarto, la mitad y tres cuartos del camino entre
+    G7 y G8, así que leen como subdivisiones de G7 y no como grupos nuevos.
+    """
     orden = GRUPO_ORDEN.get(grupo)
     if orden is None:
         return INK_MUTED
-    return _rampa((orden - _ORDEN_MIN) / (_ORDEN_MAX - _ORDEN_MIN))
+    base, apertura = divmod(orden, 10)      # G7_M (72) -> base 7, apertura 2
+    i = base - 1                            # índice del ancla del grupo base
+    if apertura == 0:
+        return _RAMPA_G[i]
+    return _mezcla(_RAMPA_G[i], _RAMPA_G[i + 1], apertura / 4)
 
 
 COLOR_GRUPO = {g: color_grupo(g) for g in GRUPOS_ORDENADOS}
 COLOR_GRUPO_BASE = {g: color_grupo(g) for g in GRUPOS_BASE_ORDENADOS}
 
-# Escala continua para heatmaps de magnitud (segmento x grupo, cobertura).
-ESCALA_SECUENCIAL = [[i / 10, _rampa(i / 10)] for i in range(11)]
+# Escala continua para heatmaps de MAGNITUD (segmento x grupo, cobertura).
+# Sigue siendo de un solo tono: ahí el color codifica "cuánto", no un grupo, y
+# para magnitud la guía sí pide una secuencial monocromática. La rampa de
+# riesgo multi-tono se usa solo donde el color identifica un GRUPO.
+ESCALA_SECUENCIAL = [
+    [0.0, "#e8f0fb"], [0.2, "#b7d3f6"], [0.4, "#6da7ec"],
+    [0.6, "#2a78d6"], [0.8, "#1c5cab"], [1.0, "#0d366b"],
+]
+
+# ---------------------------------------------------------------------------
+# Orden canónico de productos -- el del mapeo idx de CLAUDE.md
+# ---------------------------------------------------------------------------
+# Se impone explícitamente en los visuales que comparan paneles (el comparador
+# de dos meses) para que el orden NO dependa de los datos de cada mes: si un
+# producto se ordena por volumen, cambia de posición entre paneles y la
+# comparación visual deja de servir.
+PRODUCTOS_ORDENADOS = [
+    "consumo", "tdc", "libranza", "rotativo",
+    "hip_vis", "hip_novis", "lea_hab_vis", "lea_hab_novis",
+    "comercial", "micro", "sobregiro",
+    "sufi_veh", "sufi_moto", "sufi_cpe", "sufi_con", "calm",
+]
 
 # ---------------------------------------------------------------------------
 # Series categóricas -- máximo 4, en orden fijo, nunca cicladas

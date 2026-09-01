@@ -94,14 +94,91 @@ Esto tiene una consecuencia directa sobre los visuales:
 
 ## Restricciones del entorno — no negociables
 
-1. **Sin permisos de escritura.** No hay `CREATE TABLE`, `INSERT`, ni tablas
-   temporales en ninguna zona. Todo se resuelve dentro de un `SELECT`.
+1. **Sí hay permisos de escritura** en el esquema `proceso`. Se pueden crear
+   tablas. Esto cambió: el repo nació sin escritura y todo se resolvía dentro
+   de un `SELECT`, con cada agregado repitiendo el mismo unpivot. Ver "Las dos
+   capas".
 2. **Sin vistas.** No están disponibles en la plataforma.
 3. **El repo no contiene datos.** Ni resultados, ni muestras, ni extractos, ni
-   conteos reales. Solo código SQL y documentación. Las queries se escriben y
-   versionan aquí, pero se ejecutan en otro entorno.
+   conteos reales. Solo código SQL y documentación. Esto NO cambió y no cambia
+   porque haya escritura: las tablas viven en Impala, el repo versiona los
+   scripts que las crean. Los HTML que genera la app también contienen datos y
+   por eso `exportes/` está en `.gitignore`.
 4. **Motor: Impala.** No Hive, no Spark SQL, no Trino. Ver la sección de
    particularidades más abajo.
+
+## Las dos capas
+
+El SQL tiene dos capas con **ciclos de vida distintos**, y confundirlas es el
+error a evitar:
+
+| | `sql/20_construccion/` | `sql/30_lectura/` |
+|---|---|---|
+| Qué hace | CREA las tablas | SELECT sobre esas tablas |
+| Cuándo corre | una vez al mes, al llegar la partición | en cada carga de la app |
+| Parámetros | **ninguno** | **ninguno** |
+| Quién lo corre | una persona, a mano | Streamlit |
+| Costo | minutos | segundos |
+
+**Los scripts de construcción no llevan `{DESDE}` ni `{HASTA}`.** Construyen
+todo el histórico disponible y la app filtra en pandas: los agregados son de
+decenas de miles de filas y caben enteros en memoria. Con eso `data.py` no
+sustituye marcadores, `st.cache_data` cachea una vez, y mover un selector del
+sidebar es instantáneo porque no vuelve a Impala.
+
+La excepción es la migración, por el rezago: en vez de parametrizarlo se
+construyen **dos tablas**, `proceso.migracion_r1` y `proceso.migracion_r6`
+(y sus equivalentes de PD). Son análisis distintos y no encadenables, así que
+tenerlos como tablas separadas además lo hace explícito.
+
+### La tabla intermedia es la ganancia principal
+
+`proceso.largo_calificaciones` materializa el unpivot con `grupo IS NOT NULL`
+ya aplicado. Antes, cada agregado repetía el mismo cross join contra los 16
+productos; ahora se paga una vez por construcción. Es la razón de más peso
+para tener escritura.
+
+Cuidado con lo que **no** puede leer de ahí: la cobertura necesita las filas
+SIN grupo, y los agregados de PD trabajan sobre dos series de cliente, no
+sobre 16 productos. Esos cinco leen la tabla ancha directo. El detalle está en
+`sql/20_construccion/00_orden.md`.
+
+### Forma de un script de construcción
+
+```sql
+drop table if exists proceso.<nombre> purge;
+
+create table proceso.<nombre>
+stored as parquet
+as
+select ...;
+
+compute stats proceso.<nombre>;
+```
+
+**El `compute stats` no es opcional.** Sin estadísticas Impala elige planes de
+join malos, y se nota en las tablas que se cruzan — la migración une
+`largo_calificaciones` contra sí misma y contra la base de clientes.
+
+Son tres sentencias, no una: si el cliente no acepta varias por llamada, hay
+que separarlas y ejecutarlas en secuencia.
+
+Los CTEs internos siguen existiendo dentro de cada `CREATE TABLE AS`: la regla
+de no usar subconsultas en el `FROM` se mantiene. Lo que cambia es que los
+pasos intermedios ahora pueden ser tablas físicas.
+
+### La construcción NO es concurrente
+
+El `drop` + `create` deja la tabla **inexistente** mientras dura. Si dos
+personas construyen a la vez, o alguien construye mientras la app lee, se
+rompe: la segunda escritura se pisa con la primera, o la app falla con "table
+does not exist".
+
+No hay bloqueo ni transacción que lo impida. **La construcción es un proceso
+manual y controlado**: una persona, avisando, y sin nadie leyendo. Si algún día
+molesta, el patrón es construir en `_nueva` y hacer swap con dos
+`alter table ... rename`; no está implementado porque hoy es mensual y
+coordinada.
 
 ## Reglas de código SQL
 
@@ -529,12 +606,19 @@ sí es dimensión, porque los cortes sí son por producto.
 
 ```
 sql/
-  00_perfilado/      resuelve los pendientes de arriba; va primero
+  00_perfilado/      chequeos de salud del dato; van contra la tabla fuente
     duplicados_ingestion_day.sql    una ingestión por mes (pendiente 1)
     nulos_pd_vs_grupo.sql           pd vs grupo, nulos-cadena (2 y 3)
     dominio_grupos_y_escala_pd.sql  dominio de grupo, escala de pd (4 y 5)
     validacion_mapeo.sql            cuadra los 16 count(g_*) contra `largo`
-  10_agregados/      lo que consume Power BI
+  20_construccion/   CREAN las tablas de proceso. Una vez al mes, sin parámetros
+    00_orden.md             secuencia y dependencias. LEER ANTES DE CORRER
+    01_largo_calificaciones  el unpivot materializado. VA PRIMERO
+    02..10                   un archivo por tabla
+  30_lectura/        SELECT sin filtros sobre esas tablas. Es lo único que
+                     llama Streamlit
+  10_agregados/      HISTÓRICO: la versión parametrizada, de cuando no había
+                     escritura. Ya no la usa la app
     -- páginas funcionales (negocio)
     base_clientes.sql       clientes por mes y segmento (tabla ancha)
     cobertura_producto.sql  16 count(g_*), salida ancha, despivota en M

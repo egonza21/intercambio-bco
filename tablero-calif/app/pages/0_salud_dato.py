@@ -115,6 +115,20 @@ st.markdown(
 st.plotly_chart(charts.discordancia_pd_grupo(nulos),
                 use_container_width=True, key="p0_disc")
 
+# Cuántos productos quedaron fuera del gráfico. Sin esto, ver tres líneas deja
+# la duda de si el resto no tiene casos o si el filtro se los comió.
+if not nulos.empty:
+    _tot = nulos.groupby("producto")["pd_nulo_grupo_no_nulo"].sum()
+    _con, _sin = int((_tot > 0).sum()), int((_tot == 0).sum())
+    st.markdown(
+        f'<p class="nota"><b>{_con} de {_con + _sin} productos</b> tienen al '
+        f'menos un caso en la ventana y son los que aparecen arriba. Los '
+        f'{_sin} restantes están en cero todos los meses y se dejan fuera de '
+        f'la leyenda para que el gráfico no se llene de líneas planas. Si un '
+        f'producto que hoy está en cero empieza a acumular casos, aparece solo '
+        f'como una línea nueva.</p>',
+        unsafe_allow_html=True)
+
 st.markdown("---")
 st.download_button("Descargar el perfilado de nulos en CSV", data=data.csv(nulos),
                    file_name="nulos_pd_vs_grupo.csv", mime="text/csv", key="p0_dl")

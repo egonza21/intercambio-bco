@@ -243,9 +243,13 @@ def construir(desde: int, hasta: int, mes: int, rezago: int) -> str:
              "que crezcan sugiere que la replicación de PD se degrada.")
     doc.cierra()
 
-    dist = data.distribucion_grupo(desde, hasta)
-    base = data.base_clientes(desde, hasta)
-    cob = data.cobertura_producto(desde, hasta)
+    def _v(df):
+        return df if df.empty or "idx_mes" not in df.columns \
+            else df[df["idx_mes"].between(desde, hasta)]
+
+    dist = _v(data.distribucion_grupo())
+    base = _v(data.base_clientes())
+    cob = _v(data.cobertura_producto())
     dist_mes = dist[dist["idx_mes"] == mes]
     base_mes = base[base["idx_mes"] == mes]
     cob_mes = cob[cob["idx_mes"] == mes]
@@ -293,7 +297,7 @@ def construir(desde: int, hasta: int, mes: int, rezago: int) -> str:
                 f"válida con este rezago es la de "
                 f"{theme.etiqueta_mes_idx(primer_valido)}.")
     if hasta >= primer_valido:
-        mig = data.migracion(desde_ok, hasta, rezago)
+        mig = _v(data.migracion(rezago))
         mig_mes = mig[mig["idx_mes"] == mes_mig]
         doc.sub(f"Matriz de migración · consumo · {theme.etiqueta_mes_idx(mes_mig)}")
         doc.figura(charts.matriz_migracion(mig_mes, "consumo", True))
@@ -304,7 +308,7 @@ def construir(desde: int, hasta: int, mes: int, rezago: int) -> str:
         doc.figura(charts.estabilidad_deterioro(mig, "consumo"))
         doc.sub("Peores saltos")
         doc.tabla(charts.tabla_peores_saltos(mig_mes))
-        mig_pd = data.migracion_pd(desde_ok, hasta, rezago)
+        mig_pd = _v(data.migracion_pd(rezago))
         if not mig_pd.empty:
             doc.sub("Migración de deciles de PD — serie general")
             doc.figura(charts.matriz_migracion_pd(
@@ -318,8 +322,8 @@ def construir(desde: int, hasta: int, mes: int, rezago: int) -> str:
     doc.cierra()
 
     # --- 4. Modelos --------------------------------------------------------
-    pdm = data.pd_por_modelo(desde, hasta)
-    cortes = data.cortes_por_producto(desde, hasta)
+    pdm = _v(data.pd_por_modelo())
+    cortes = _v(data.cortes_por_producto())
     cortes_mes = cortes[cortes["idx_mes"] == mes] if not cortes.empty else cortes
     doc.seccion("modelos", "Modelos",
                 "Solo hay dos PD: una para los doce productos que no son de "

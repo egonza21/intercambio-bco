@@ -15,8 +15,12 @@ import streamlit as st
 
 import theme
 
-DIR_SQL = Path(__file__).resolve().parent.parent / "sql" / "10_agregados"
-DIR_PERFILADO = Path(__file__).resolve().parent.parent / "sql" / "00_perfilado"
+_SQL = Path(__file__).resolve().parent.parent / "sql"
+DIR_LECTURA = _SQL / "30_lectura"
+DIR_PERFILADO = _SQL / "00_perfilado"
+
+# Esquema donde vive la capa construida. Un solo lugar.
+ESQUEMA = "proceso"
 
 TTL = 3600  # una hora
 
@@ -63,11 +67,25 @@ def _a_parametros(sql: str) -> str:
     return re.sub(r"\{(DESDE|HASTA|REZAGO|MES)\}", sub, sql)
 
 
-def _leer_sql(nombre: str) -> str:
-    ruta = DIR_SQL / nombre
+def _leer_lectura(nombre: str) -> str:
+    """Lee una consulta de sql/30_lectura/. NO sustituye parámetros: esas
+    consultas no tienen. Traen la tabla entera y la app filtra en pandas."""
+    ruta = DIR_LECTURA / f"{nombre}.sql"
     if not ruta.exists():
-        raise FileNotFoundError(f"No está el agregado {ruta}")
-    return _a_parametros(ruta.read_text(encoding="utf-8"))
+        raise FileNotFoundError(
+            f"No está la consulta de lectura {ruta}. ¿Se corrió "
+            f"sql/20_construccion/? Ver 00_orden.md.")
+    return ruta.read_text(encoding="utf-8")
+
+
+@st.cache_data(ttl=TTL, show_spinner="Leyendo la tabla construida...")
+def _tabla(nombre: str) -> pd.DataFrame:
+    """Trae una tabla de la capa construida, entera y sin filtros.
+
+    Una sola llamada a Impala por tabla y por hora. Todo el filtrado de la app
+    (ventana de meses, producto, segmento) pasa después en pandas, así que
+    mover un selector del sidebar no vuelve a consultar."""
+    return _con_mes(_ejecutar(_leer_lectura(nombre), {}))
 
 
 def _leer_perfilado(nombre: str, sentencia: int = 0) -> str:
@@ -97,23 +115,22 @@ def _valores(desde: int, hasta: int, rezago: int | None = None) -> dict[str, str
     return vals
 
 
-# --- carga de cada agregado ------------------------------------------------
-# Sin caché, cada interacción con un filtro golpearía Impala. Los agregados son
-# de decenas de miles de filas y caben en memoria de sobra.
+# --- capa de LECTURA -------------------------------------------------------
+# Los agregados ya no se calculan al vuelo: los construye sql/20_construccion/
+# una vez al mes y acá solo se leen enteros. Por eso ninguna de estas funciones
+# recibe rango de fechas -- el filtro es responsabilidad de la app, en pandas.
 
-@st.cache_data(ttl=TTL, show_spinner="Consultando Impala...")
-def base_clientes(desde: int, hasta: int) -> pd.DataFrame:
-    df = _ejecutar(_leer_sql("base_clientes.sql"), _valores(desde, hasta))
-    return _con_mes(df)
+def base_clientes() -> pd.DataFrame:
+    return _tabla("base_clientes")
 
 
-@st.cache_data(ttl=TTL, show_spinner="Consultando Impala...")
-def cobertura_producto(desde: int, hasta: int) -> pd.DataFrame:
-    """Llega ANCHA (16 columnas cob_*) y se despivota acá, que es el
-    equivalente de la 'Anular dinamización' de Power Query. El SQL sale ancho a
-    propósito: así evita el cross join contra los 16 productos."""
-    df = _ejecutar(_leer_sql("cobertura_producto.sql"), _valores(desde, hasta))
-    df = _con_mes(df)
+def cobertura_producto() -> pd.DataFrame:
+    """Llega ANCHA (16 columnas cob_*) y se despivota acá, que es lo mismo que
+    hacía Power Query. El SQL sale ancho a propósito: así se resuelve con 16
+    count() sobre una pasada, sin cross join."""
+    df = _tabla("cobertura_producto")
+    if df.empty:
+        return df
     cols = [c for c in df.columns if c.startswith("cob_")]
     largo = df.melt(
         id_vars=[c for c in df.columns if not c.startswith("cob_")],
@@ -124,40 +141,38 @@ def cobertura_producto(desde: int, hasta: int) -> pd.DataFrame:
     return largo
 
 
-@st.cache_data(ttl=TTL, show_spinner="Consultando Impala...")
-def distribucion_grupo(desde: int, hasta: int) -> pd.DataFrame:
-    df = _ejecutar(_leer_sql("distribucion_grupo.sql"), _valores(desde, hasta))
-    return _con_grupo(_con_mes(df))
+def distribucion_grupo() -> pd.DataFrame:
+    return _con_grupo(_tabla("distribucion_grupo"))
 
 
-@st.cache_data(ttl=TTL, show_spinner="Consultando Impala...")
-def migracion(desde: int, hasta: int, rezago: int) -> pd.DataFrame:
-    return _con_mes(_ejecutar(_leer_sql("migracion.sql"), _valores(desde, hasta, rezago)))
+def migracion(rezago: int) -> pd.DataFrame:
+    """El rezago NO es un parámetro de la consulta: son dos tablas distintas,
+    migracion_r1 y migracion_r6. Ver sql/20_construccion/00_orden.md."""
+    return _tabla(f"migracion_r{int(rezago)}")
 
 
-@st.cache_data(ttl=TTL, show_spinner="Consultando Impala...")
-def migracion_pd(desde: int, hasta: int, rezago: int) -> pd.DataFrame:
-    return _con_mes(_ejecutar(_leer_sql("migracion_pd.sql"), _valores(desde, hasta, rezago)))
+def migracion_pd(rezago: int) -> pd.DataFrame:
+    return _tabla(f"migracion_pd_r{int(rezago)}")
 
 
-@st.cache_data(ttl=TTL, show_spinner="Consultando Impala...")
-def pd_por_modelo(desde: int, hasta: int) -> pd.DataFrame:
-    return _con_mes(_ejecutar(_leer_sql("pd_por_modelo.sql"), _valores(desde, hasta)))
+def pd_por_modelo() -> pd.DataFrame:
+    return _tabla("pd_por_modelo")
 
 
-@st.cache_data(ttl=TTL, show_spinner="Consultando Impala...")
-def cortes_por_producto(desde: int, hasta: int) -> pd.DataFrame:
-    return _con_grupo(_con_mes(_ejecutar(_leer_sql("cortes_por_producto.sql"),
-                                         _valores(desde, hasta))))
+def cortes_por_producto() -> pd.DataFrame:
+    return _con_grupo(_tabla("cortes_por_producto"))
 
 
 # --- perfilado: las consultas que responden "¿son confiables estos datos?" --
+# Estas SÍ siguen yendo directo contra la tabla fuente y con parámetros. No se
+# materializan a propósito: son diagnósticas, se corren cuando hacen falta, y
+# la de mapeo se ejecuta deliberadamente sobre un solo mes porque su costo se
+# multiplica por la cantidad de meses del rango.
 
 @st.cache_data(ttl=TTL, show_spinner="Verificando ingestiones...")
 def duplicados_ingestion_day(desde: int, hasta: int) -> pd.DataFrame:
-    df = _ejecutar(_leer_perfilado("duplicados_ingestion_day.sql"),
-                   _valores(desde, hasta))
-    return _con_mes(df)
+    return _con_mes(_ejecutar(_leer_perfilado("duplicados_ingestion_day.sql"),
+                              _valores(desde, hasta)))
 
 
 @st.cache_data(ttl=TTL, show_spinner="Validando el mapeo idx -> producto...")

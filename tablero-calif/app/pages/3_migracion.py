@@ -49,7 +49,16 @@ if hasta < primer_valido:
         f"({theme.etiqueta_mes_idx(primer_valido)}). Ampliá la ventana.")
     st.stop()
 
-mig = data.migracion(desde_ok, hasta, rezago)
+
+# Los agregados llegan ENTEROS desde la capa construida. El recorte de la
+# ventana se hace acá, en pandas: es instantáneo y no vuelve a Impala.
+def _ventana(df):
+    if df.empty or "idx_mes" not in df.columns:
+        return df
+    return df[df["idx_mes"].between(desde_ok, hasta)]
+
+
+mig = _ventana(data.migracion(rezago))
 mes_mig = max(mes, primer_valido)
 mig_mes = mig[mig["idx_mes"] == mes_mig]
 
@@ -123,7 +132,7 @@ st.markdown(
     'página de Modelos.</p>',
     unsafe_allow_html=True)
 
-mig_pd = data.migracion_pd(desde_ok, hasta, rezago)
+mig_pd = _ventana(data.migracion_pd(rezago))
 if mig_pd.empty:
     st.info("Sin datos de migración de PD para esta ventana.")
 else:
