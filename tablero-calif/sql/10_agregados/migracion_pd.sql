@@ -91,8 +91,11 @@ with series as (
     union all select 2,        'vivienda'
 ),
 
--- Las dos PD del cliente. Ver pd_por_modelo.sql para por qué es COALESCE
--- sobre el grupo de columnas y no una columna representativa.
+-- Las dos PD del cliente, cada una con el modelo de la MISMA columna que
+-- aportó la PD: el CASE sigue el mismo orden que el COALESCE. Dos coalesce
+-- independientes pueden salir de columnas distintas y emparejar mal la PD
+-- con su modelo, lo que aquí además contaminaría la partición del ntile.
+-- Ver pd_por_modelo.sql.
 pd_cliente as (
   select
     c.num_doc,
@@ -102,17 +105,29 @@ pd_cliente as (
              c.pd_comercial, c.pd_micro,     c.pd_sobre,     c.pd_sufi_veh,
              c.pd_sufi_moto, c.pd_sufi_cpe,  c.pd_sufi_con,  c.pd_calm)
       as pd_general,
-    coalesce(c.modelo_consumo,   c.modelo_tdc,      c.modelo_libranza,
-             c.modelo_rota,      c.modelo_comercial, c.modelo_micro,
-             c.modelo_sobre,     c.modelo_sufi_veh, c.modelo_sufi_moto,
-             c.modelo_sufi_cpe,  c.modelo_sufi_con, c.modelo_calm)
-      as modelo_general,
+    case
+      when c.pd_consumo   is not null then c.modelo_consumo
+      when c.pd_tdc       is not null then c.modelo_tdc
+      when c.pd_libranza  is not null then c.modelo_libranza
+      when c.pd_rota      is not null then c.modelo_rota
+      when c.pd_comercial is not null then c.modelo_comercial
+      when c.pd_micro     is not null then c.modelo_micro
+      when c.pd_sobre     is not null then c.modelo_sobre
+      when c.pd_sufi_veh  is not null then c.modelo_sufi_veh
+      when c.pd_sufi_moto is not null then c.modelo_sufi_moto
+      when c.pd_sufi_cpe  is not null then c.modelo_sufi_cpe
+      when c.pd_sufi_con  is not null then c.modelo_sufi_con
+      when c.pd_calm      is not null then c.modelo_calm
+    end as modelo_general,
     coalesce(c.pd_hip_vis, c.pd_hip_novis,
              c.pd_lea_hab_vis, c.pd_lea_hab_novis)
       as pd_vivienda,
-    coalesce(c.modelo_hip_vis, c.modelo_hip_novis,
-             c.modelo_lea_hab_vis, c.modelo_lea_hab_novis)
-      as modelo_vivienda
+    case
+      when c.pd_hip_vis       is not null then c.modelo_hip_vis
+      when c.pd_hip_novis     is not null then c.modelo_hip_novis
+      when c.pd_lea_hab_vis   is not null then c.modelo_lea_hab_vis
+      when c.pd_lea_hab_novis is not null then c.modelo_lea_hab_novis
+    end as modelo_vivienda
   from resultados_riesgos.maestro_calificaciones_pn c
   where c.ingestion_year * 12 + c.ingestion_month
         between {DESDE} - {REZAGO} and {HASTA}

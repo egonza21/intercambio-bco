@@ -240,6 +240,24 @@ resuelva contra `dim_producto[producto]`.
 Sale ancha del SQL a propósito: así el agregado no necesita el cross join
 contra productos y se resuelve con 16 `count()` sobre una sola pasada.
 
+### migración: los dos segmentos
+
+`migracion` trae `segmento_anterior` y `segmento_actual` por separado, no un
+segmento único. **Un cliente que cambia de segmento no cambió de riesgo**,
+pero con una sola columna aparece saliendo de un segmento y entrando a otro,
+indistinguible de una pérdida y una ganancia de elegibilidad reales.
+
+Para el modelo eso significa dos relaciones contra la dimensión de segmento
+(o una activa y otra con `USERELATIONSHIP`), igual que con `grupo_base`.
+
+La medida por defecto de las páginas funcionales debería filtrar
+`segmento_anterior = segmento_actual` para leer la migración a segmento
+constante, con un botón o marcador para incluir los cambios de segmento
+cuando esa sea la pregunta. En `entrada` el `segmento_anterior` viene NULL y
+en `salida` el `segmento_actual`, así que el filtro de igualdad las excluye:
+tenerlo en cuenta al construir la medida de reconciliación contra
+`base_clientes`.
+
 ### migración: dos consultas, no una
 
 `migracion_mensual` (rezago 1) y `migracion_semestral` (rezago 6) apuntan al
@@ -290,14 +308,46 @@ donde `p_actual` y `p_base` son la proporción del bin dentro de su período
 (`clientes` del bin sobre `clientes` del período, para el mismo
 `producto` + `modelo`). Umbrales en 0,1 y 0,25.
 
-Los bins son de ancho fijo por escala (20 bins: 0,05 para probabilidad, 50
-para puntaje) y los bordes no dependen del período — condición necesaria para
-que el PSI signifique algo. Cuidar `DIVIDE` para los bins vacíos: un bin con
-`p_base` = 0 da división por cero, y lo habitual es excluirlo o sustituirlo
-por un épsilon.
+Los bordes de los bins no dependen del período ni de los datos — condición
+necesaria para que el PSI signifique algo. Cuidar `DIVIDE` para los bins
+vacíos: un bin con `p_base` = 0 da división por cero, y lo habitual es
+excluirlo o sustituirlo por un épsilon.
 
-El grano es `serie_pd` + `modelo`, **sin producto**: solo hay dos PD, así que
-un PSI "por producto" serían 12 copias del mismo número.
+**Los bins de probabilidad son logarítmicos, no lineales.** Las PD observadas
+se concentran en el extremo bajo del rango, muy por debajo de 0,05, no
+repartidas sobre [0,1]: con bins lineales de 0,05 todos los clientes caían en
+el bin 0, el histograma era una sola barra y el PSI daba cero siempre — un
+cero que parecía estabilidad y era ceguera del instrumento. El binning es
+`floor(log10(pd) * 20)`, o sea 20 bins por década, pasos de ~12%: la
+resolución es relativa, así que la franja poblada queda repartida en decenas
+de bins en vez de colapsar en uno.
+
+Consecuencia para los visuales: **el índice `bin` sale negativo**, porque
+log10 de un número menor que 1 es negativo. No usar `bin` como etiqueta del
+eje; usar `bin_min` / `bin_max`, que vienen en la salida con el valor real de
+PD de cada borde. `bin` sirve para ordenar y para emparejar el mismo bin entre
+períodos en el cálculo del PSI.
+
+Los modelos de puntaje (`escala = 'puntaje_0_999'`) sí usan bins lineales de
+ancho 50, porque el puntaje ocupa todo su rango. Un visual no debe mezclar las
+dos escalas en un mismo eje.
+
+El grano es `segmento` + `serie_pd` + `modelo`, **sin producto**: solo hay dos
+PD, así que un PSI "por producto" serían 12 copias del mismo número. El
+segmento sí está, porque un modelo puede degradarse en un segmento y no en
+otro, y sin la columna en el hecho no hay forma de reconstruirlo.
+
+### La escala se deriva del nombre del modelo
+
+`escala` vale `puntaje_0_999` cuando el nombre del modelo contiene
+"advanced", y `probabilidad_0_1` en cualquier otro caso. Es una regla sobre el
+nombre, no una inferencia sobre los datos.
+
+**Hay que revisarla cuando aparezca un modelo nuevo.** Un modelo de puntaje
+que no se llame "advanced" quedaría clasificado como probabilidad y sus bins
+saldrían mal. `sql/00_perfilado/dominio_grupos_y_escala_pd.sql` es la query
+que lo detecta: si el `pd_max` de algún modelo pasa de 1 y no matchea la
+regla, hay que ampliarla en `pd_por_modelo.sql`.
 
 ### Migración de PD: no confundirla con el PSI
 

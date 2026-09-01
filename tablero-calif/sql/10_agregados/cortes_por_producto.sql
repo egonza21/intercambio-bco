@@ -137,48 +137,29 @@ largo_raw as (
   where c.ingestion_year * 12 + c.ingestion_month between {DESDE} and {HASTA}
 ),
 
-largo as (
-  select
-    r.num_doc,
-    r.tipo_doc,
-    r.ingestion_year,
-    r.ingestion_month,
-    r.segmento,
-    r.producto,
-    r.familia_producto,
-    r.pd,
-    r.grupo,
-    regexp_replace(r.grupo, '_[BMA]$', '') as grupo_base,
-    cast(substr(r.grupo, 2, 1) as int) * 10
-      + case substr(r.grupo, 4, 1)
-          when 'B' then 1
-          when 'M' then 2
-          when 'A' then 3
-          else 0
-        end as grupo_orden,
-    r.modelo
-  from largo_raw r
-),
+-- Sin CTE `largo`: esta query ordena por `pd_min` y no usa `grupo_base` ni
+-- `grupo_orden`, así que calcularlas sería un regexp_replace sobre las
+-- ~240 MM de expansiones del cross join para descartarlas después.
 
 rangos as (
   select
-    l.ingestion_year,
-    l.ingestion_month,
-    l.producto,
-    l.modelo,
-    l.grupo,
+    r.ingestion_year,
+    r.ingestion_month,
+    r.producto,
+    r.modelo,
+    r.grupo,
     count(*)   as clientes,
-    min(l.pd)  as pd_min,
-    max(l.pd)  as pd_max
-  from largo l
-  where l.grupo is not null
-    and l.pd is not null
+    min(r.pd)  as pd_min,
+    max(r.pd)  as pd_max
+  from largo_raw r
+  where r.grupo is not null
+    and r.pd is not null
   group by
-    l.ingestion_year,
-    l.ingestion_month,
-    l.producto,
-    l.modelo,
-    l.grupo
+    r.ingestion_year,
+    r.ingestion_month,
+    r.producto,
+    r.modelo,
+    r.grupo
 )
 
 select
