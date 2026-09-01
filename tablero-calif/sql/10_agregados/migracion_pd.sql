@@ -43,9 +43,14 @@
 -- dice que la distribución no se movió, solo que el orden se mantuvo.
 --
 -- El `ntile` se particiona TAMBIÉN por modelo, no solo por serie y mes. Es
--- obligatorio: el modelo "advanced" entrega puntaje 0-999 y el resto
--- probabilidad 0-1, así que rankearlos juntos mandaría a todos los clientes
--- de advanced a los deciles altos por escala, no por riesgo.
+-- obligatorio: ADVANCE_1_1 y ADVANCE_INCLUSION entregan puntaje 0-999 y el
+-- resto probabilidad 0-1, así que rankearlos juntos mandaría a todos los
+-- clientes de esos dos modelos a los deciles altos por escala, no por riesgo.
+--
+-- Ojo con la diferencia respecto de pd_por_modelo.sql: aquí NO hace falta
+-- clasificar la escala, porque particionar por `modelo` ya aísla cada escala
+-- en su propio ranking. Por eso esta query no tiene la lista de modelos de
+-- puntaje y no se rompe si esa lista queda desactualizada.
 --
 -- ----------------------------------------------------------------------------
 -- {REZAGO}: mensual y semestral NO son encadenables

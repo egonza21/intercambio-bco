@@ -337,17 +337,20 @@ PD, así que un PSI "por producto" serían 12 copias del mismo número. El
 segmento sí está, porque un modelo puede degradarse en un segmento y no en
 otro, y sin la columna en el hecho no hay forma de reconstruirlo.
 
-### La escala se deriva del nombre del modelo
+### La escala sale de una lista explícita de modelos
 
-`escala` vale `puntaje_0_999` cuando el nombre del modelo contiene
-"advanced", y `probabilidad_0_1` en cualquier otro caso. Es una regla sobre el
-nombre, no una inferencia sobre los datos.
+`escala` vale `puntaje_0_999` para `ADVANCE_1_1` y `ADVANCE_INCLUSION`, y
+`probabilidad_0_1` para el resto. Es un mapeo manual escrito en el `CASE` de
+`pd_por_modelo.sql`, no una inferencia sobre los datos ni un patrón de nombre.
 
-**Hay que revisarla cuando aparezca un modelo nuevo.** Un modelo de puntaje
-que no se llame "advanced" quedaría clasificado como probabilidad y sus bins
-saldrían mal. `sql/00_perfilado/dominio_grupos_y_escala_pd.sql` es la query
-que lo detecta: si el `pd_max` de algún modelo pasa de 1 y no matchea la
-regla, hay que ampliarla en `pd_por_modelo.sql`.
+**Hay que actualizarla cuando entre un modelo nuevo en escala de puntaje**, y
+el síntoma de olvidarlo no es un error sino un histograma con bins absurdos.
+El detalle está en `CLAUDE.md`, "Modelos en escala de puntaje".
+
+Conviene subir `escala` a `dim_modelo` como atributo, para poder filtrar por
+unidad desde cualquier visual sin depender de que el hecho la traiga. Si se
+hace, **la fuente de verdad sigue siendo el SQL**: la dimensión copia esa
+clasificación, no la redefine, o quedan dos listas que mantener.
 
 ### Migración de PD: no confundirla con el PSI
 

@@ -320,11 +320,52 @@ alfabética que numéricamente.
   La verificación posterior sobre los 16 meses de la ventana confirma un solo
   `ingestion_day` por mes, sin duplicados. El código asume una fila por
   cliente + mes y no lleva `row_number()`.
-- **`pd` no es comparable entre modelos.** Verificado 2026-08-25: el modelo
-  "advanced" devuelve el puntaje crudo en `pd` (escala 0 a 999), mientras el
-  resto usa 0 a 1. La traducción a `grupo`/`grupo_base` sí llega normalizada a
-  G1-G8 vía tablas traductoras externas. Cualquier histograma o cálculo de PSI
-  sobre `pd` debe segmentar por `modelo`, no asumir una escala [0,1] uniforme.
+- **`pd` no es comparable entre modelos.** Verificado 2026-08-25:
+  `ADVANCE_1_1` y `ADVANCE_INCLUSION` devuelven el puntaje crudo en `pd`
+  (escala 0 a 999), mientras el resto usa 0 a 1. La traducción a
+  `grupo`/`grupo_base` sí llega normalizada a G1-G8 vía tablas traductoras
+  externas. Cualquier histograma o cálculo de PSI sobre `pd` debe segmentar
+  por `modelo`, no asumir una escala [0,1] uniforme. Ver "Modelos en escala de
+  puntaje".
+
+## Modelos en escala de puntaje — lista manual
+
+**Modelos que devuelven puntaje de 0 a 999 en vez de probabilidad [0,1]:**
+
+```
+ADVANCE_1_1
+ADVANCE_INCLUSION
+```
+
+Esta lista vive en el `CASE` de `escala` en `sql/10_agregados/pd_por_modelo.sql`
+y **es un mapeo manual**. No hay nada en la tabla que marque la escala de un
+modelo: hay que saberlo y escribirlo.
+
+**Hay que actualizarla cuando entre un modelo nuevo en escala de puntaje.**
+
+### El síntoma de olvidarlo no es un error
+
+Un modelo de puntaje que no esté en la lista queda etiquetado
+`probabilidad_0_1` y sus valores de 0 a 999 se binean con la escala
+logarítmica pensada para probabilidades. La query corre, devuelve filas, y no
+avisa nada. Lo que se ve es **un histograma con bins absurdos**: el modelo
+nuevo aterriza en índices de bin positivos, junto a los negativos de las PD
+reales, en el mismo eje y bajo la misma etiqueta de escala. Si aparece eso,
+revisar esta lista antes que cualquier otra cosa.
+
+`sql/00_perfilado/dominio_grupos_y_escala_pd.sql` es la query que lo detecta a
+tiempo: si el `pd_max` de algún modelo pasa de 1 y no está acá, falta
+agregarlo. Vale correrla cuando cambie la vigencia de modelos.
+
+### Por qué una lista y no un patrón
+
+La versión anterior usaba `lower(modelo) like '%advanced%'`, con "d" final,
+cuando los modelos reales se llaman `ADVANCE`, sin "d". **No matcheaba
+ninguno**: los dos modelos de puntaje se estaban clasificando como
+probabilidad. Un patrón con comodín falla de las dos formas — no atrapa lo que
+debería, y atraparía un modelo futuro con "advance" en el nombre que sí venga
+en escala 0-1. La lista explícita hace imposibles ambos casos, a cambio de
+tener que mantenerla.
 
 ## Pendientes por resolver — en este orden
 
@@ -353,10 +394,10 @@ El perfilado va primero porque su resultado cambia el resto del código.
    con las columnas `grupo_base` y `grupo_orden` en el fragmento canónico.
    Ver "Apertura de G7 y G8 en los productos sufi".
 5. **¿Las PD están en la misma escala entre productos?**
-   **Resuelto 2026-08-25: no, y el eje no es el producto sino el modelo.** El
-   modelo "advanced" devuelve `pd` en escala 0-999; el resto en 0-1. Cualquier
-   histograma o PSI sobre `pd` debe segmentar por `modelo`. Ver "Decisiones ya
-   tomadas".
+   **Resuelto 2026-08-25: no, y el eje no es el producto sino el modelo.**
+   `ADVANCE_1_1` y `ADVANCE_INCLUSION` devuelven `pd` en escala 0-999; el
+   resto en 0-1. Cualquier histograma o PSI sobre `pd` debe segmentar por
+   `modelo`. Ver "Modelos en escala de puntaje".
 6. **Confirmar los valores de `familia_producto`** con la clasificación oficial
    de productos del banco. Sigue abierto — se confirma más adelante. Por
    ahora se sigue usando la propuesta de la tabla "Mapeo idx → producto" tal

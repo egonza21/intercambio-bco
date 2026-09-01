@@ -68,9 +68,11 @@
 --                    apilado de las barras y desalinea el eje de la matriz
 --                    de migración (la diagonal deja de ser estabilidad y el
 --                    deterioro neto sale mal calculado).
---   - PD: el modelo "advanced" devuelve el puntaje crudo en `pd` (0 a 999,
---     no 0 a 1); la traducción a `grupo`/`grupo_base` sí llega normalizada
---     a G1-G8 vía tablas traductoras externas al alcance de este fragmento.
+--   - PD: los modelos ADVANCE_1_1 y ADVANCE_INCLUSION devuelven el puntaje
+--     crudo en `pd` (0 a 999, no 0 a 1); la traducción a `grupo`/`grupo_base`
+--     sí llega normalizada a G1-G8 vía tablas traductoras externas al alcance
+--     de este fragmento. La lista de modelos de puntaje es un mapeo manual:
+--     ver CLAUDE.md, "Modelos en escala de puntaje".
 --     `pd` NO es comparable entre productos ni entre modelos dentro del
 --     mismo producto: cualquier histograma o PSI sobre `pd` debe segmentar
 --     por `modelo`, no asumir escala [0,1] uniforme.
