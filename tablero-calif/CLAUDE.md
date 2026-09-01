@@ -309,10 +309,13 @@ alfabética que numéricamente.
 - **Filtro de nulos estándar: `grupo IS NOT NULL`, no `pd IS NOT NULL`.**
   Verificado 2026-08-25: un producto tiene 726 casos con `pd` nula y `grupo`
   poblado; en el resto de los casos ambas coinciden. `grupo` es lo que manda.
-- **Los nulos NO vienen como cadena.** Verificado 2026-08-25: `'NA'`, `''` y
-  `'SIN CALIFICACION'` dieron 0 casos en todos los productos
-  (`g_*` y `modelo_*`). `IS NULL` alcanza; no hace falta un `CASE` adicional
-  para atrapar nulos disfrazados.
+- **Los nulos NO vienen como cadena — con una excepción abierta en
+  `modelo_*`.** Verificado 2026-08-25: `'NA'`, `''` y `'SIN CALIFICACION'`
+  dieron 0 casos en todos los productos (`g_*` y `modelo_*`), así que para
+  `g_*` `IS NULL` alcanza y el filtro `grupo IS NOT NULL` no necesita un
+  `CASE` extra. Pero el 2026-09-01 se reportó un valor vacío o nulo en
+  `modelo_*`, que contradice esa medición. Hasta resolverlo, el SQL normaliza
+  `modelo` con `nullif(trim(modelo), '')`. Ver "El modelo vacío".
 - **La deduplicación por `ingestion_day` NO se hace en SQL.** Verificado
   2026-08-25: un mes puntual llegó con dos ingestiones totales (reproceso
   controlado, una de ellas un ensayo). Fue un **caso único, ya corregido a
@@ -320,11 +323,95 @@ alfabética que numéricamente.
   La verificación posterior sobre los 16 meses de la ventana confirma un solo
   `ingestion_day` por mes, sin duplicados. El código asume una fila por
   cliente + mes y no lleva `row_number()`.
-- **`pd` no es comparable entre modelos.** Verificado 2026-08-25: el modelo
-  "advanced" devuelve el puntaje crudo en `pd` (escala 0 a 999), mientras el
-  resto usa 0 a 1. La traducción a `grupo`/`grupo_base` sí llega normalizada a
-  G1-G8 vía tablas traductoras externas. Cualquier histograma o cálculo de PSI
-  sobre `pd` debe segmentar por `modelo`, no asumir una escala [0,1] uniforme.
+- **`pd` no es comparable entre modelos.** Verificado 2026-08-25:
+  `ADVANCE_1_1` y `ADVANCE_INCLUSION` devuelven el puntaje crudo en `pd`
+  (escala 0 a 999), mientras el resto usa 0 a 1. La traducción a
+  `grupo`/`grupo_base` sí llega normalizada a G1-G8 vía tablas traductoras
+  externas. Cualquier histograma o cálculo de PSI sobre `pd` debe segmentar
+  por `modelo`, no asumir una escala [0,1] uniforme. Ver "Modelos en escala de
+  puntaje".
+
+## Modelos y su escala
+
+### Los ocho modelos vigentes
+
+Verificado 2026-09-01. Son los modelos vigentes en todo el proceso de
+calificación, y **aplican a los 16 productos**, no a un subconjunto: el mismo
+modelo puede aparecer en cualquiera de las columnas `modelo_*`.
+
+| modelo              | escala de `pd`   |
+|---------------------|------------------|
+| `ADVANCE_1_1`       | puntaje 0–999    |
+| `ADVANCE_INCLUSION` | puntaje 0–999    |
+| `T1_COMPORT`        | probabilidad 0–1 |
+| `T1_COMPORT_NEI`    | probabilidad 0–1 |
+| `T1_COMPORT_SOCIAL` | probabilidad 0–1 |
+| `T2`                | probabilidad 0–1 |
+| `T3_MARCAS`         | probabilidad 0–1 |
+| `T_2_3`             | probabilidad 0–1 |
+
+Además existe un **valor vacío o nulo** en `modelo_*`. No es un noveno modelo:
+es la ausencia de modelo. Ver "El modelo vacío" más abajo.
+
+Que los ocho apliquen a todos los productos es consistente con que solo haya
+dos PD (ver "La PD no es por producto"): el modelo es un atributo del cliente,
+igual que la PD, y las 16 columnas `modelo_*` son la misma información
+replicada por familia.
+
+### La escala es un mapeo manual
+
+Solo los dos `ADVANCE_*` devuelven puntaje; los otros seis devuelven
+probabilidad. Esa clasificación vive en el `CASE` de `escala` en
+`sql/10_agregados/pd_por_modelo.sql` y **es un mapeo manual**: no hay nada en
+la tabla que marque la escala de un modelo, hay que saberlo y escribirlo.
+
+**Hay que actualizarla cuando entre un modelo nuevo en escala de puntaje.**
+
+### El síntoma de olvidarlo no es un error
+
+Un modelo de puntaje que no esté en la lista queda etiquetado
+`probabilidad_0_1` y sus valores de 0 a 999 se binean con la escala
+logarítmica pensada para probabilidades. La query corre, devuelve filas, y no
+avisa nada. Lo que se ve es **un histograma con bins absurdos**: el modelo
+nuevo aterriza en índices de bin positivos, junto a los negativos de las PD
+reales, en el mismo eje y bajo la misma etiqueta de escala. Si aparece eso,
+revisar esta lista antes que cualquier otra cosa.
+
+`sql/00_perfilado/dominio_grupos_y_escala_pd.sql` es la query que lo detecta a
+tiempo: si el `pd_max` de algún modelo pasa de 1 y no está acá, falta
+agregarlo. Vale correrla cuando cambie la vigencia de modelos.
+
+### Por qué una lista y no un patrón
+
+La versión anterior usaba `lower(modelo) like '%advanced%'`, con "d" final,
+cuando los modelos reales se llaman `ADVANCE`, sin "d". **No matcheaba
+ninguno**: los dos modelos de puntaje se estaban clasificando como
+probabilidad. Un patrón con comodín falla de las dos formas — no atrapa lo que
+debería, y atraparía un modelo futuro con "advance" en el nombre que sí venga
+en escala 0-1. La lista explícita hace imposibles ambos casos, a cambio de
+tener que mantenerla.
+
+### El modelo vacío
+
+En `modelo_*` aparece un valor **vacío o nulo**. Semánticamente es lo mismo —
+ausencia de modelo — así que el SQL lo normaliza a NULL con
+`nullif(trim(modelo), '')` antes de usarlo como llave. Sin eso, `''` y `NULL`
+serían dos categorías distintas en el tablero significando lo mismo, y la
+cadena vacía además pasaría desapercibida en un eje.
+
+Con la normalización, una fila sin modelo cae en la rama `else` del `CASE` de
+escala y queda etiquetada `probabilidad_0_1`. **Es un supuesto, no un dato**:
+seis de los ocho modelos son de probabilidad, así que es el default razonable,
+pero si esas filas resultaran ser de puntaje sus bins saldrían mal igual que
+con un modelo nuevo sin declarar. Vale mirar cuántas son antes de darle peso a
+esa categoría en un visual.
+
+**Esto contradice un hallazgo previo del perfilado**, que decía que `''` daba
+0 casos en `modelo_*` (ver pendiente 3). Alguna de las dos observaciones es
+incompleta: puede que el vacío sea NULL y no cadena, o que aparezca en meses
+que la consulta de perfilado no cubrió. Correr
+`sql/00_perfilado/nulos_pd_vs_grupo.sql` sobre la ventana completa lo resuelve;
+mientras tanto la normalización cubre los dos casos.
 
 ## Pendientes por resolver — en este orden
 
@@ -343,9 +430,15 @@ El perfilado va primero porque su resultado cambia el resto del código.
    nula y `grupo` poblado; el resto coincide. El filtro base pasa a ser
    `grupo IS NOT NULL`. Ver "Decisiones ya tomadas".
 3. **¿Los nulos vienen como cadena?**
-   **Resuelto 2026-08-25: no, 0 casos en todos los productos** para `'NA'`,
-   `''` y `'SIN CALIFICACION'` en `g_*` y `modelo_*`. `IS NULL` alcanza. Ver
-   "Decisiones ya tomadas".
+   **Resuelto para `g_*` el 2026-08-25** (0 casos de `'NA'`, `''` y
+   `'SIN CALIFICACION'`), que es lo que decide el filtro `grupo IS NOT NULL`.
+   **REABIERTO para `modelo_*` el 2026-09-01**: se reportó un valor vacío o
+   nulo en esas columnas, que contradice la medición anterior. Falta correr
+   `sql/00_perfilado/nulos_pd_vs_grupo.sql` sobre la ventana completa para
+   saber si es NULL o cadena vacía, y cuántas filas son. El SQL ya normaliza
+   con `nullif(trim(modelo), '')`, que cubre los dos casos, así que no
+   bloquea; pero la clasificación de escala de esas filas es un supuesto.
+   Ver "El modelo vacío".
 4. **¿El dominio de los grupos es exactamente G1–G8?**
    **Resuelto 2026-08-25: no exactamente.** `sufi_moto`, `sufi_cpe` y
    `sufi_con` abren G7 y G8 en `G7_B/G7_M/G7_A` y `G8_B/G8_M/G8_A` (severidad
@@ -353,10 +446,10 @@ El perfilado va primero porque su resultado cambia el resto del código.
    con las columnas `grupo_base` y `grupo_orden` en el fragmento canónico.
    Ver "Apertura de G7 y G8 en los productos sufi".
 5. **¿Las PD están en la misma escala entre productos?**
-   **Resuelto 2026-08-25: no, y el eje no es el producto sino el modelo.** El
-   modelo "advanced" devuelve `pd` en escala 0-999; el resto en 0-1. Cualquier
-   histograma o PSI sobre `pd` debe segmentar por `modelo`. Ver "Decisiones ya
-   tomadas".
+   **Resuelto 2026-08-25: no, y el eje no es el producto sino el modelo.**
+   `ADVANCE_1_1` y `ADVANCE_INCLUSION` devuelven `pd` en escala 0-999; el
+   resto en 0-1. Cualquier histograma o PSI sobre `pd` debe segmentar por
+   `modelo`. Ver "Modelos en escala de puntaje".
 6. **Confirmar los valores de `familia_producto`** con la clasificación oficial
    de productos del banco. Sigue abierto — se confirma más adelante. Por
    ahora se sigue usando la propuesta de la tabla "Mapeo idx → producto" tal

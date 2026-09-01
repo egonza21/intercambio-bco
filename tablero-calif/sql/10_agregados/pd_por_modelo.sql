@@ -90,24 +90,36 @@
 -- pero daría -infinito. Cae en el bin -120, visible y aislado.
 --
 -- ----------------------------------------------------------------------------
--- La escala se deriva del NOMBRE del modelo
+-- La escala sale de una LISTA EXPLÍCITA de modelos
 -- ----------------------------------------------------------------------------
--- El modelo "advanced" deja en pd el puntaje crudo, de 0 a 999, en vez de una
--- probabilidad. Antes esto se detectaba con `max(pd) over (partition by ...)`
--- sobre ~30 MM de filas: caro (un shuffle completo solo para clasificar) y
--- frágil (dependía de que el máximo observado cruzara el umbral de 1 en cada
--- ventana de refresco).
+-- Los modelos `ADVANCE_1_1` y `ADVANCE_INCLUSION` dejan en pd el puntaje
+-- crudo, de 0 a 999, en vez de una probabilidad. El resto entrega [0,1].
 --
--- Ahora sale del nombre, que es un dato del modelo y no de la muestra:
+-- Antes esto se detectaba con `max(pd) over (partition by ...)` sobre decenas
+-- de millones de filas: caro (un shuffle completo solo para clasificar) y
+-- frágil (dependía de que el máximo observado cruzara 1 en cada ventana).
 --
---     lower(modelo) like '%advanced%'  ->  puntaje_0_999
---     cualquier otro                   ->  probabilidad_0_1
+-- La lista es un **mapeo manual, deliberadamente cerrado**. NO usar un LIKE
+-- con comodín:
+--   - Un `like '%advance%'` atraparía cualquier modelo futuro con "advance"
+--     en el nombre aunque venga en escala 0-1, y lo binearía mal.
+--   - La versión anterior de este archivo usaba `like '%advanced%'` -- con
+--     "d" final -- y los modelos reales se llaman ADVANCE, sin "d". No
+--     matcheaba ninguno: los dos modelos de puntaje se estaban bineando como
+--     probabilidad, sin error visible. Es exactamente el modo de falla que
+--     una lista explícita hace imposible.
 --
--- **Esta regla hay que revisarla cuando aparezca un modelo nuevo.** Un modelo
--- de puntaje que no se llame "advanced" quedaría clasificado como
--- probabilidad y sus bins saldrían mal. `sql/00_perfilado/
--- dominio_grupos_y_escala_pd.sql` es la query que lo detecta: si el pd_max de
--- algún modelo pasa de 1 y no matchea la regla, hay que ampliarla aquí.
+-- La comparación es exacta y sensible a mayúsculas, contra el valor tal como
+-- viene en las columnas `modelo_*`.
+--
+-- **Hay que actualizar esta lista cuando entre un modelo nuevo en escala de
+-- puntaje.** El síntoma de olvidarlo NO es un error: es un histograma con
+-- bins absurdos -- el modelo nuevo queda etiquetado `probabilidad_0_1` y sus
+-- puntajes de 0 a 999 se bineen con la escala logarítmica, cayendo en bins
+-- positivos junto a los negativos de las PD reales, en el mismo eje.
+-- `sql/00_perfilado/dominio_grupos_y_escala_pd.sql` es la query que lo
+-- detecta: si el pd_max de un modelo pasa de 1 y no está en esta lista, hay
+-- que agregarlo aquí. Ver CLAUDE.md, "Modelos en escala de puntaje".
 --
 -- ----------------------------------------------------------------------------
 -- Grano
@@ -181,10 +193,13 @@ series_pd as (
       when 1 then p.pd_general
       when 2 then p.pd_vivienda
     end as pd,
-    case s.idx
+    -- `''` y NULL son lo mismo -- ausencia de modelo -- y sin normalizar
+    -- serían dos categorías distintas en el tablero. Ver "El modelo vacío"
+    -- en CLAUDE.md.
+    nullif(trim(case s.idx
       when 1 then p.modelo_general
       when 2 then p.modelo_vivienda
-    end as modelo
+    end), '') as modelo
   from pd_cliente p
   cross join series s
 ),
@@ -198,7 +213,8 @@ escalado as (
     sp.serie_pd,
     sp.modelo,
     sp.pd,
-    case when lower(sp.modelo) like '%advanced%' then 'puntaje_0_999'
+    case when sp.modelo in ('ADVANCE_1_1', 'ADVANCE_INCLUSION')
+         then 'puntaje_0_999'
          else 'probabilidad_0_1' end as escala
   from series_pd sp
   where sp.pd is not null

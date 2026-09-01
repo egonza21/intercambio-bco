@@ -85,11 +85,19 @@ order by l.producto, l.grupo;
 -- Min, máximo y promedio de pd por producto.
 --
 -- Resuelto 2026-08-25: la escala NO es uniforme, y el eje que la determina
--- no es el producto sino el modelo. El modelo "advanced" deja en `pd` el
--- puntaje crudo (0 a 999) en vez de una probabilidad [0,1]; su traducción a
--- grupo sí llega normalizada a G1-G8 vía traductores. Por eso el histograma
--- de PD y el PSI deben segmentar por `modelo`, nunca mezclar modelos de
--- escala distinta en un mismo eje.
+-- no es el producto sino el modelo. `ADVANCE_1_1` y `ADVANCE_INCLUSION` dejan
+-- en `pd` el puntaje crudo (0 a 999) en vez de una probabilidad [0,1]; su
+-- traducción a grupo sí llega normalizada a G1-G8 vía traductores. Por eso el
+-- histograma de PD y el PSI deben segmentar por `modelo`, nunca mezclar
+-- modelos de escala distinta en un mismo eje.
+--
+-- **Esta query es el control de la lista manual de modelos de puntaje.**
+-- sql/10_agregados/pd_por_modelo.sql clasifica la escala con un IN contra esa
+-- lista, y nada en la tabla marca la escala de un modelo. Correr este bloque
+-- agrupando por modelo cuando cambie la vigencia de modelos: **si aparece un
+-- modelo con pd_max > 1 que no esté en la lista, hay que agregarlo ahí**. El
+-- síntoma de no hacerlo no es un error, es un histograma con bins absurdos.
+-- Ver CLAUDE.md, "Modelos en escala de puntaje".
 --
 -- Para ver qué modelo trae qué escala hace falta agrupar por modelo, no solo
 -- por producto: un mismo producto puede traer varias versiones de modelo. Si
