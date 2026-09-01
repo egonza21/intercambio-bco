@@ -40,7 +40,7 @@ USUARIO = "efgon"
 #     pyformat (impyla / DB-API)   ->  "%({nombre})s"
 #     named    (SQLAlchemy)        ->  ":{nombre}"
 #     qmark posicional             ->  requiere reordenar, ver _a_parametros()
-FORMATO_PARAMETRO = "%({nombre})s"
+FORMATO_PARAMETRO = "{{{nombre}}}"
 
 
 def _ejecutar(consulta: str, parametros: dict[str, str]) -> pd.DataFrame:

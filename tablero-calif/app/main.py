@@ -19,7 +19,7 @@ import theme  # noqa: E402
 
 st.set_page_config(
     page_title="Calificaciones de riesgo",
-    page_icon="◼",
+    page_icon="⬛",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -86,10 +86,10 @@ barra_lateral()
 paginas = [
     # Salud del dato va PRIMERA: si algo de ahí está en rojo, los números de
     # las otras páginas no significan lo que parecen.
-    st.Page("pages/0_salud_dato.py", title="Salud del dato", icon="◈", default=True),
-    st.Page("pages/1_panorama.py", title="Panorama del mes", icon="◧"),
-    st.Page("pages/2_evolucion.py", title="Evolución", icon="◨"),
-    st.Page("pages/3_migracion.py", title="Migración", icon="◩"),
-    st.Page("pages/4_modelos.py", title="Modelos", icon="◪"),
+    st.Page("pages/0_salud_dato.py", title="Salud del dato", icon="🩺", default=True),
+    st.Page("pages/1_panorama.py", title="Panorama del mes", icon="📊"),
+    st.Page("pages/2_evolucion.py", title="Evolución", icon="📈"),
+    st.Page("pages/3_migracion.py", title="Migración", icon="🔀"),
+    st.Page("pages/4_modelos.py", title="Modelos", icon="🧮"),
 ]
 st.navigation(paginas).run()

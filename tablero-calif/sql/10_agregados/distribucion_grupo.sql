@@ -125,7 +125,7 @@ largo_raw as (
   from resultados_riesgos.maestro_calificaciones_pn c
   cross join productos p
   where c.ingestion_year * 12 + c.ingestion_month between {DESDE} and {HASTA}
-),
+)
 
 -- Sin CTE `largo`: esta query no usa ninguna columna derivada, así que el
 -- SELECT final consume `largo_raw` directo. Ver el encabezado.
