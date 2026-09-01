@@ -44,6 +44,11 @@ Deja un archivo en `exportes/`, con la fecha de generación en el nombre. Se
 abre con doble clic: no necesita servidor, ni Python, ni red. `plotly.js` va
 embebido en el propio archivo porque la red del banco puede no alcanzar el CDN.
 
+El HTML arranca con la sección de **salud del dato**, con el estado de los
+cuatro chequeos al momento de generarlo: quien abra el reporte sabe si los
+números que va a mirar son confiables antes de mirarlos. Con `--sin-mapeo` se
+omite la validación del mapeo, que es la consulta más lenta.
+
 > **Los HTML contienen datos.** Son agregados, pero son datos igual. `exportes/`
 > está en `.gitignore` y así tiene que quedar: el repo es solo código (ver
 > `CLAUDE.md`, "Restricciones del entorno").
@@ -114,10 +119,31 @@ de nombres de grupo, hay que tocar los dos lados.
 
 | Página | Audiencia | Consultas |
 |---|---|---|
+| Salud del dato | todas | las cuatro de `sql/00_perfilado/` |
 | Panorama del mes | negocio | `distribucion_grupo`, `cobertura_producto`, `base_clientes` |
 | Evolución | negocio | `distribucion_grupo`, `base_clientes` |
 | Migración | negocio + modelos | `migracion`, `migracion_pd` |
 | Modelos | seguimiento técnico | `pd_por_modelo`, `cortes_por_producto` |
+
+**Salud del dato va primera** y no es una página de gráficos: es el estado de
+los cuatro chequeos de perfilado, cada uno verde o rojo con una línea de
+explicación. El detalle solo se despliega si el chequeo falla. Si algo ahí
+está en rojo, los números de las otras páginas no significan lo que parecen.
+
+1. **Un solo `ingestion_day` por mes** — todo el repo asume una fila por
+   cliente y mes; sin eso cada `count(*)` duplica en silencio.
+2. **Mapeo `idx` → columna alineado** — un `CASE` desalineado no da error,
+   solo etiqueta mal. Es la consulta más lenta (16 agregados sobre la misma
+   partición), así que viene desactivada y se corre sobre un mes.
+3. **Dominio de grupos y modelos sin novedades** — un grupo fuera de G1–G8 y
+   las aperturas de sufi, o un modelo fuera de los ocho conocidos. Un modelo
+   nuevo no es un error: es una novedad. Si viene en escala de puntaje hay que
+   agregarlo a la lista de `pd_por_modelo.sql` o sus bins salen mal sin dar
+   síntoma, y el chequeo lo señala aparte.
+4. **PD y grupo concuerdan** — las filas con PD nula y grupo poblado existen y
+   no son un problema; el chequeo falla si **crecen** respecto al mes anterior.
+   Es el único de los cuatro con gráfico, porque es el único donde la
+   tendencia dice algo.
 
 La separación entre las dos audiencias está explicada en
 `powerbi/notas_modelo.md`, "Dos audiencias, dos bloques de páginas". Vale acá

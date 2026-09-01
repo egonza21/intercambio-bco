@@ -16,6 +16,7 @@ import streamlit as st
 import theme
 
 DIR_SQL = Path(__file__).resolve().parent.parent / "sql" / "10_agregados"
+DIR_PERFILADO = Path(__file__).resolve().parent.parent / "sql" / "00_perfilado"
 
 TTL = 3600  # una hora
 
@@ -67,6 +68,23 @@ def _leer_sql(nombre: str) -> str:
     if not ruta.exists():
         raise FileNotFoundError(f"No está el agregado {ruta}")
     return _a_parametros(ruta.read_text(encoding="utf-8"))
+
+
+def _leer_perfilado(nombre: str, sentencia: int = 0) -> str:
+    """Lee una consulta de sql/00_perfilado/.
+
+    `dominio_grupos_y_escala_pd.sql` tiene DOS sentencias en el mismo archivo
+    (comparten el unpivot pero agregan a distinto grano), y el helper ejecuta
+    una por vez. `sentencia` elige cuál. El corte es por `;` sobre el código
+    sin comentarios: ninguna de estas consultas tiene `;` dentro de un literal.
+    """
+    ruta = DIR_PERFILADO / nombre
+    if not ruta.exists():
+        raise FileNotFoundError(f"No está la consulta de perfilado {ruta}")
+    codigo = "\n".join(l for l in ruta.read_text(encoding="utf-8").splitlines()
+                       if not l.strip().startswith("--"))
+    partes = [p.strip() for p in codigo.split(";") if p.strip()]
+    return _a_parametros(partes[sentencia])
 
 
 def _valores(desde: int, hasta: int, rezago: int | None = None) -> dict[str, str]:
@@ -133,6 +151,45 @@ def cortes_por_producto(desde: int, hasta: int) -> pd.DataFrame:
                                          _valores(desde, hasta))))
 
 
+# --- perfilado: las consultas que responden "¿son confiables estos datos?" --
+
+@st.cache_data(ttl=TTL, show_spinner="Verificando ingestiones...")
+def duplicados_ingestion_day(desde: int, hasta: int) -> pd.DataFrame:
+    df = _ejecutar(_leer_perfilado("duplicados_ingestion_day.sql"),
+                   _valores(desde, hasta))
+    return _con_mes(df)
+
+
+@st.cache_data(ttl=TTL, show_spinner="Validando el mapeo idx -> producto...")
+def validacion_mapeo(desde: int, hasta: int) -> pd.DataFrame:
+    """OJO: el lado ancho son 16 agregados, uno por rama del UNION ALL, así
+    que el costo se multiplica por la cantidad de meses del rango. La página
+    la llama siempre con desde = hasta."""
+    return _ejecutar(_leer_perfilado("validacion_mapeo.sql"), _valores(desde, hasta))
+
+
+@st.cache_data(ttl=TTL, show_spinner="Revisando el dominio de grupos...")
+def dominio_grupos(desde: int, hasta: int) -> pd.DataFrame:
+    """Sentencia 1 de dominio_grupos_y_escala_pd.sql: valores de grupo por
+    producto."""
+    return _ejecutar(_leer_perfilado("dominio_grupos_y_escala_pd.sql", 0),
+                     _valores(desde, hasta))
+
+
+@st.cache_data(ttl=TTL, show_spinner="Revisando la escala de los modelos...")
+def escala_modelos(desde: int, hasta: int) -> pd.DataFrame:
+    """Sentencia 2: rango de pd por mes, producto y modelo. Es el control de
+    la lista manual de modelos de puntaje de pd_por_modelo.sql."""
+    return _con_mes(_ejecutar(_leer_perfilado("dominio_grupos_y_escala_pd.sql", 1),
+                              _valores(desde, hasta)))
+
+
+@st.cache_data(ttl=TTL, show_spinner="Comparando pd contra grupo...")
+def nulos_pd_vs_grupo(desde: int, hasta: int) -> pd.DataFrame:
+    return _con_mes(_ejecutar(_leer_perfilado("nulos_pd_vs_grupo.sql"),
+                              _valores(desde, hasta)))
+
+
 # --- enriquecimiento común -------------------------------------------------
 
 def _con_mes(df: pd.DataFrame) -> pd.DataFrame:
@@ -171,6 +228,15 @@ FAMILIA_PRODUCTO = {
 # Modelos que devuelven puntaje 0-999. Espejo de la lista de
 # sql/10_agregados/pd_por_modelo.sql. Ver CLAUDE.md, "Modelos y su escala".
 MODELOS_PUNTAJE = {"ADVANCE_1_1", "ADVANCE_INCLUSION"}
+
+# Los ocho modelos vigentes. Espejo de CLAUDE.md, "Modelos y su escala".
+# Un modelo fuera de esta lista no es un error: es una novedad que hay que
+# mirar, porque si viene en escala de puntaje hay que agregarlo a
+# MODELOS_PUNTAJE y a pd_por_modelo.sql o sus bins salen mal sin dar síntoma.
+MODELOS_CONOCIDOS = {
+    "ADVANCE_1_1", "ADVANCE_INCLUSION", "T1_COMPORT", "T1_COMPORT_NEI",
+    "T1_COMPORT_SOCIAL", "T2", "T3_MARCAS", "T_2_3",
+}
 
 
 def meses_disponibles(df: pd.DataFrame) -> list[int]:

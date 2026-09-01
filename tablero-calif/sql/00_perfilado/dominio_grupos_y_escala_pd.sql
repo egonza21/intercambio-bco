@@ -99,11 +99,10 @@ order by l.producto, l.grupo;
 -- síntoma de no hacerlo no es un error, es un histograma con bins absurdos.
 -- Ver CLAUDE.md, "Modelos en escala de puntaje".
 --
--- Para ver qué modelo trae qué escala hace falta agrupar por modelo, no solo
--- por producto: un mismo producto puede traer varias versiones de modelo. Si
--- se necesita ese corte, agregar `l.modelo` al select y al group by (implica
--- llevar el CASE de modelo al CTE, hoy omitido porque este bloque solo mira
--- pd).
+-- El grano es mes + producto + modelo. El modelo está porque sin él no se
+-- puede saber qué escala trae cada uno (un mismo producto trae varias
+-- versiones de modelo a lo largo de la ventana); el mes, porque permite fechar
+-- la aparición de un modelo nuevo en vez de solo constatarla.
 -- ----------------------------------------------------------------------------
 
 with productos as (
@@ -127,7 +126,20 @@ with productos as (
 
 largo as (
   select
+    c.ingestion_year,
+    c.ingestion_month,
     p.producto,
+    case p.idx
+      when  1 then c.modelo_consumo       when  2 then c.modelo_tdc
+      when  3 then c.modelo_libranza      when  4 then c.modelo_rota
+      when  5 then c.modelo_hip_vis       when  6 then c.modelo_hip_novis
+      when  7 then c.modelo_lea_hab_vis   when  8 then c.modelo_lea_hab_novis
+      when  9 then c.modelo_comercial     when 10 then c.modelo_micro
+      when 11 then c.modelo_sobre         when 12 then c.modelo_sufi_veh
+      when 13 then c.modelo_sufi_moto     when 14 then c.modelo_sufi_cpe
+      when 15 then c.modelo_sufi_con      when 16 then c.modelo_calm
+    end as modelo,
+
     case p.idx
       when  1 then c.pd_consumo        when  2 then c.pd_tdc
       when  3 then c.pd_libranza       when  4 then c.pd_rota
@@ -144,11 +156,14 @@ largo as (
 )
 
 select
+  l.ingestion_year,
+  l.ingestion_month,
   l.producto,
+  l.modelo,
   min(l.pd) as pd_min,
   max(l.pd) as pd_max,
   avg(l.pd) as pd_promedio
 from largo l
 where l.pd is not null
-group by l.producto
-order by l.producto;
+group by l.ingestion_year, l.ingestion_month, l.producto, l.modelo
+order by l.ingestion_year, l.ingestion_month, l.producto, l.modelo;

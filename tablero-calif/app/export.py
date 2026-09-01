@@ -76,6 +76,17 @@ def _css() -> str:
     nav.indice a, .volver {{ color: {theme.SERIES[0]}; text-decoration: none; }}
     nav.indice a:hover, .volver:hover {{ text-decoration: underline; }}
     .volver {{ font-size: .78rem; display: inline-block; margin-top: .4rem; }}
+    .chks {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+            gap: .8rem; margin: 0 0 1.6rem; }}
+    .chk {{ background: var(--surface); border: 1px solid var(--border);
+           border-left: 3px solid var(--ink-muted); border-radius: 10px;
+           padding: .8rem 1rem; }}
+    .chk-est {{ font-size: .68rem; font-weight: 700; letter-spacing: .05em; }}
+    .chk-nom {{ font-size: .9rem; font-weight: 600; color: var(--ink);
+               margin: .2rem 0 .35rem; line-height: 1.3; }}
+    .chk-res {{ font-size: .78rem; color: var(--ink-soft); line-height: 1.45; }}
+    .banda {{ border-radius: 10px; padding: .85rem 1.1rem; margin: 0 0 1.4rem;
+             font-size: .87rem; }}
     .kpis {{ display: flex; flex-wrap: wrap; gap: .8rem; margin: 0 0 1.4rem; }}
     .kpi {{ flex: 1 1 170px; background: var(--surface); border: 1px solid var(--border);
            border-radius: 10px; padding: .8rem 1rem; }}
@@ -135,6 +146,22 @@ class Doc:
         self._primera = False
         self.partes.append(f'<div class="fig">{html}</div>')
 
+    def semaforo(self, chequeos) -> None:
+        """Estado de los chequeos de salud, en tarjetas con borde de color."""
+        celdas = []
+        for c in chequeos:
+            sin_correr = c.nota == "sin ejecutar"
+            color = (theme.INK_MUTED if sin_correr
+                     else (theme.ESTADO_OK if c.ok else theme.ESTADO_CRITICO))
+            icono = "○" if sin_correr else ("●" if c.ok else "▲")
+            etiqueta = "SIN CORRER" if sin_correr else c.estado
+            celdas.append(
+                f'<div class="chk" style="border-left-color:{color}">'
+                f'<div class="chk-est" style="color:{color}">{icono} {etiqueta}</div>'
+                f'<div class="chk-nom">{c.nombre}</div>'
+                f'<div class="chk-res">{c.resumen}</div></div>')
+        self.partes.append(f'<div class="chks">{"".join(celdas)}</div>')
+
     def kpis(self, pares: list[tuple[str, str]]) -> None:
         celdas = "".join(
             f'<div class="kpi"><div class="lbl">{l}</div><div class="val">{v}</div></div>'
@@ -174,8 +201,56 @@ class Doc:
             "</div></body></html>")
 
 
-def construir(desde: int, hasta: int, mes: int, rezago: int) -> str:
+def construir(desde: int, hasta: int, mes: int, rezago: int,
+              con_mapeo: bool = True) -> str:
     doc = Doc()
+
+    # --- 0. Salud del dato -------------------------------------------------
+    # Va PRIMERO: el que abre el reporte tiene que saber si los números que va
+    # a mirar son confiables antes de mirarlos.
+    nulos = data.nulos_pd_vs_grupo(desde, hasta)
+    chequeos = [charts.chequeo_ingestion_day(data.duplicados_ingestion_day(desde, hasta))]
+    if con_mapeo:
+        # Sobre un solo mes: el costo se multiplica por la cantidad de meses.
+        chequeos.append(charts.chequeo_mapeo(data.validacion_mapeo(mes, mes)))
+    else:
+        chequeos.append(charts.Chequeo(
+            "Mapeo idx → columna alineado", True,
+            "No se ejecutó al generar este archivo.", nota="sin ejecutar"))
+    chequeos.append(charts.chequeo_dominio(
+        data.dominio_grupos(desde, hasta), data.escala_modelos(desde, hasta),
+        data.MODELOS_CONOCIDOS))
+    chequeos.append(charts.chequeo_pd_grupo(nulos))
+
+    fallan = [c for c in chequeos if not c.ok]
+    doc.seccion("salud", "Salud del dato",
+                "Estado de los chequeos de sql/00_perfilado/ al momento de "
+                "generar este archivo. Son los supuestos sobre los que se "
+                "apoya todo lo que sigue.")
+    if fallan:
+        doc.partes.append(
+            f'<div class="banda" style="background:#fdeceb;'
+            f'border:1px solid {theme.ESTADO_CRITICO};color:#7d1f1f">'
+            f'<b>{len(fallan)} de {len(chequeos)} chequeos piden revisión.</b> '
+            f'Los números de las secciones siguientes pueden no significar lo '
+            f'que parecen hasta resolverlos.</div>')
+    else:
+        doc.partes.append(
+            f'<div class="banda" style="background:#e9f7e9;'
+            f'border:1px solid {theme.ESTADO_OK};color:#0b5c0b">'
+            f'<b>Los {len(chequeos)} chequeos pasan.</b> Los supuestos del '
+            f'tablero se sostienen en esta ventana.</div>')
+    doc.semaforo(chequeos)
+    for c in fallan:
+        if c.detalle is not None and not c.detalle.empty:
+            doc.sub(f"Detalle · {c.nombre}")
+            doc.tabla(c.detalle, maximo=15)
+    doc.sub("Discordancia entre PD y grupo, mes a mes")
+    doc.figura(charts.discordancia_pd_grupo(nulos))
+    doc.nota("Es el único de los cuatro chequeos donde la tendencia dice algo. "
+             "Que existan filas con PD nula y grupo poblado no es un problema; "
+             "que crezcan sugiere que la replicación de PD se degrada.")
+    doc.cierra()
 
     dist = data.distribucion_grupo(desde, hasta)
     base = data.base_clientes(desde, hasta)
@@ -294,6 +369,9 @@ def main() -> int:
     p.add_argument("--hasta", type=int, default=202608, help="mes final, YYYYMM")
     p.add_argument("--mes", type=int, default=None, help="mes de corte, YYYYMM")
     p.add_argument("--rezago", type=int, default=1, choices=[1, 6])
+    p.add_argument("--sin-mapeo", action="store_true",
+                   help="omite la validación del mapeo, que es la consulta "
+                        "más lenta (16 agregados sobre la misma partición)")
     p.add_argument("--salida", type=Path, default=None)
     a = p.parse_args()
 
@@ -303,7 +381,7 @@ def main() -> int:
     desde, hasta = a_idx(a.desde), a_idx(a.hasta)
     mes = a_idx(a.mes) if a.mes else hasta
 
-    html = construir(desde, hasta, mes, a.rezago)
+    html = construir(desde, hasta, mes, a.rezago, con_mapeo=not a.sin_mapeo)
 
     DIR_SALIDA.mkdir(exist_ok=True)
     destino = a.salida or (DIR_SALIDA /

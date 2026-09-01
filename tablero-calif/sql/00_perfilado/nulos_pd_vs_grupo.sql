@@ -46,6 +46,8 @@ with productos as (
 
 largo as (
   select
+    c.ingestion_year,
+    c.ingestion_month,
     p.producto,
     case p.idx
       when  1 then c.pd_consumo        when  2 then c.pd_tdc
@@ -83,6 +85,8 @@ largo as (
 )
 
 select
+  l.ingestion_year,
+  l.ingestion_month,
   l.producto,
   count(*) as filas_totales,
   sum(case when l.pd is null then 1 else 0 end) as pd_nulo,
@@ -98,5 +102,5 @@ select
   sum(case when upper(trim(l.modelo)) in ('NA', 'SIN CALIFICACION') then 1 else 0 end)
     as modelo_valor_na
 from largo l
-group by l.producto
-order by l.producto;
+group by l.ingestion_year, l.ingestion_month, l.producto
+order by l.ingestion_year, l.ingestion_month, l.producto;

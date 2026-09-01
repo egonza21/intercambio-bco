@@ -9,7 +9,12 @@
 -- un CASE desalineado en el unpivot.
 --
 -- Parámetros:
---   {MES} -- un solo mes, en ingestion_year*12+ingestion_month
+--   {DESDE}, {HASTA} -- rango de meses, en ingestion_year*12+ingestion_month
+--
+-- Se parametriza por rango como el resto del repo, pero OJO: el lado ancho
+-- son 16 agregados, uno por rama del UNION ALL, así que el costo se
+-- multiplica por la cantidad de meses del rango. Correrla sobre UN mes
+-- (desde = hasta) salvo que haga falta explícitamente cubrir más.
 --
 -- ----------------------------------------------------------------------------
 -- Por qué esta query existe
@@ -53,7 +58,7 @@
 -- rama del UNION ALL. Cada uno lee UNA sola columna, así que sobre Parquet
 -- son 16 lecturas de ~1/48 de los datos, no 16 lecturas completas. El lado
 -- largo hace su propia pasada con el unpivot. Sobre un mes es barato;
--- correrla sobre la ventana entera no tendría sentido, para eso está {MES}.
+-- correrla sobre la ventana entera no tendría sentido, por eso conviene desde = hasta.
 --
 -- El CTE `largo` de este archivo no calcula `grupo_base` ni `grupo_orden`:
 -- no se usan aquí y serían un regexp_replace sobre las expansiones del cross
@@ -95,7 +100,7 @@ largo as (
     end as grupo
   from resultados_riesgos.maestro_calificaciones_pn c
   cross join productos p
-  where c.ingestion_year * 12 + c.ingestion_month = {MES}
+  where c.ingestion_year * 12 + c.ingestion_month between {DESDE} and {HASTA}
 ),
 
 conteo_largo as (
@@ -115,67 +120,67 @@ conteo_largo as (
 conteos_ancho as (
               select 'consumo' as producto, count(c.g_consumo) as conteo_ancho
               from resultados_riesgos.maestro_calificaciones_pn c
-              where c.ingestion_year * 12 + c.ingestion_month = {MES}
+              where c.ingestion_year * 12 + c.ingestion_month between {DESDE} and {HASTA}
 
     union all select 'tdc', count(c.g_tdc)
               from resultados_riesgos.maestro_calificaciones_pn c
-              where c.ingestion_year * 12 + c.ingestion_month = {MES}
+              where c.ingestion_year * 12 + c.ingestion_month between {DESDE} and {HASTA}
 
     union all select 'libranza', count(c.g_libranza)
               from resultados_riesgos.maestro_calificaciones_pn c
-              where c.ingestion_year * 12 + c.ingestion_month = {MES}
+              where c.ingestion_year * 12 + c.ingestion_month between {DESDE} and {HASTA}
 
     union all select 'rotativo', count(c.g_rota)
               from resultados_riesgos.maestro_calificaciones_pn c
-              where c.ingestion_year * 12 + c.ingestion_month = {MES}
+              where c.ingestion_year * 12 + c.ingestion_month between {DESDE} and {HASTA}
 
     union all select 'hip_vis', count(c.g_hip_vis)
               from resultados_riesgos.maestro_calificaciones_pn c
-              where c.ingestion_year * 12 + c.ingestion_month = {MES}
+              where c.ingestion_year * 12 + c.ingestion_month between {DESDE} and {HASTA}
 
     union all select 'hip_novis', count(c.g_hip_novis)
               from resultados_riesgos.maestro_calificaciones_pn c
-              where c.ingestion_year * 12 + c.ingestion_month = {MES}
+              where c.ingestion_year * 12 + c.ingestion_month between {DESDE} and {HASTA}
 
     union all select 'lea_hab_vis', count(c.g_lea_hab_vis)
               from resultados_riesgos.maestro_calificaciones_pn c
-              where c.ingestion_year * 12 + c.ingestion_month = {MES}
+              where c.ingestion_year * 12 + c.ingestion_month between {DESDE} and {HASTA}
 
     union all select 'lea_hab_novis', count(c.g_lea_hab_novis)
               from resultados_riesgos.maestro_calificaciones_pn c
-              where c.ingestion_year * 12 + c.ingestion_month = {MES}
+              where c.ingestion_year * 12 + c.ingestion_month between {DESDE} and {HASTA}
 
     union all select 'comercial', count(c.g_comercial)
               from resultados_riesgos.maestro_calificaciones_pn c
-              where c.ingestion_year * 12 + c.ingestion_month = {MES}
+              where c.ingestion_year * 12 + c.ingestion_month between {DESDE} and {HASTA}
 
     union all select 'micro', count(c.g_micro)
               from resultados_riesgos.maestro_calificaciones_pn c
-              where c.ingestion_year * 12 + c.ingestion_month = {MES}
+              where c.ingestion_year * 12 + c.ingestion_month between {DESDE} and {HASTA}
 
     union all select 'sobregiro', count(c.g_sobre)
               from resultados_riesgos.maestro_calificaciones_pn c
-              where c.ingestion_year * 12 + c.ingestion_month = {MES}
+              where c.ingestion_year * 12 + c.ingestion_month between {DESDE} and {HASTA}
 
     union all select 'sufi_veh', count(c.g_sufi_veh)
               from resultados_riesgos.maestro_calificaciones_pn c
-              where c.ingestion_year * 12 + c.ingestion_month = {MES}
+              where c.ingestion_year * 12 + c.ingestion_month between {DESDE} and {HASTA}
 
     union all select 'sufi_moto', count(c.g_sufi_moto)
               from resultados_riesgos.maestro_calificaciones_pn c
-              where c.ingestion_year * 12 + c.ingestion_month = {MES}
+              where c.ingestion_year * 12 + c.ingestion_month between {DESDE} and {HASTA}
 
     union all select 'sufi_cpe', count(c.g_sufi_cpe)
               from resultados_riesgos.maestro_calificaciones_pn c
-              where c.ingestion_year * 12 + c.ingestion_month = {MES}
+              where c.ingestion_year * 12 + c.ingestion_month between {DESDE} and {HASTA}
 
     union all select 'sufi_con', count(c.g_sufi_con)
               from resultados_riesgos.maestro_calificaciones_pn c
-              where c.ingestion_year * 12 + c.ingestion_month = {MES}
+              where c.ingestion_year * 12 + c.ingestion_month between {DESDE} and {HASTA}
 
     union all select 'calm', count(c.g_calm)
               from resultados_riesgos.maestro_calificaciones_pn c
-              where c.ingestion_year * 12 + c.ingestion_month = {MES}
+              where c.ingestion_year * 12 + c.ingestion_month between {DESDE} and {HASTA}
 )
 
 select
