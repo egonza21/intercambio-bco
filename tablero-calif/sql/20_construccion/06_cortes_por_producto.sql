@@ -1,10 +1,10 @@
 -- ============================================================================
--- CONSTRUCCIÓN: proceso.cortes_por_producto
+-- CONSTRUCCIÓN: proceso.cortes_por_producto_{IDUNICO}
 -- ----------------------------------------------------------------------------
 -- Fronteras de corte de PD por producto y grupo. Alimenta el visual de
 -- sensibilidad de cortes y la tabla de solapamientos.
 --
--- DEPENDE de proceso.largo_calificaciones. Ver 00_orden.md.
+-- DEPENDE de proceso.largo_calificaciones_{IDUNICO}. Ver 00_orden.md.
 --
 -- El max de un grupo y el min del siguiente son la frontera. `solapa` marca
 -- donde el rango de un grupo se cruza con el del anterior: dos clientes con la
@@ -15,9 +15,9 @@
 -- SIN PARÁMETROS: toda la ventana disponible.
 -- ============================================================================
 
-drop table if exists proceso.cortes_por_producto purge;
+drop table if exists proceso.cortes_por_producto_{IDUNICO} purge;
 
-create table proceso.cortes_por_producto
+create table proceso.cortes_por_producto_{IDUNICO}
 stored as parquet
 as
 with rangos as (
@@ -31,7 +31,7 @@ with rangos as (
     count(*)   as clientes,
     min(l.pd)  as pd_min,
     max(l.pd)  as pd_max
-  from proceso.largo_calificaciones l
+  from proceso.largo_calificaciones_{IDUNICO} l
   where l.pd is not null
   group by
     l.ingestion_year,
@@ -62,4 +62,4 @@ select
   ) as solapa
 from rangos r;
 
-compute stats proceso.cortes_por_producto;
+compute stats proceso.cortes_por_producto_{IDUNICO};

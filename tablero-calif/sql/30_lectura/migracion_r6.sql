@@ -1,5 +1,5 @@
 -- ============================================================================
--- LECTURA: proceso.migracion_r6
+-- LECTURA: proceso.migracion_r6_{IDUNICO}
 -- ----------------------------------------------------------------------------
 -- Matriz de migración de grupo, rezago 6 meses: mide DESPLAZAMIENTO
 -- NETO. No es la suma de seis matrices mensuales.
@@ -30,4 +30,4 @@ select
   t.grupo_base_destino,
   t.categoria,
   t.clientes
-from proceso.migracion_r6 t;
+from proceso.migracion_r6_{IDUNICO} t;

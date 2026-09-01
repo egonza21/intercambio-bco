@@ -1,5 +1,5 @@
 -- ============================================================================
--- LECTURA: proceso.pd_por_modelo
+-- LECTURA: proceso.pd_por_modelo_{IDUNICO}
 -- ----------------------------------------------------------------------------
 -- Distribución de las dos PD en bins fijos. Histograma y PSI.
 --
@@ -33,4 +33,4 @@ select
   t.pd_suma,
   t.pd_min,
   t.pd_max
-from proceso.pd_por_modelo t;
+from proceso.pd_por_modelo_{IDUNICO} t;

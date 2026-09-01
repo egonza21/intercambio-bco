@@ -1,5 +1,5 @@
 -- ============================================================================
--- LECTURA: proceso.base_clientes
+-- LECTURA: proceso.base_clientes_{IDUNICO}
 -- ----------------------------------------------------------------------------
 -- Clientes por mes y segmento. Denominador del tablero.
 --
@@ -24,4 +24,4 @@ select
   t.idx_mes,
   t.segmento,
   t.clientes
-from proceso.base_clientes t;
+from proceso.base_clientes_{IDUNICO} t;

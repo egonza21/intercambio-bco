@@ -1,5 +1,5 @@
 -- ============================================================================
--- CONSTRUCCIÓN: proceso.pd_por_modelo
+-- CONSTRUCCIÓN: proceso.pd_por_modelo_{IDUNICO}
 -- ----------------------------------------------------------------------------
 -- Distribución de las DOS PD, por segmento, serie y modelo, en bins fijos.
 -- Alimenta el histograma de PD y el PSI.
@@ -24,9 +24,9 @@
 -- SIN PARÁMETROS: toda la ventana disponible.
 -- ============================================================================
 
-drop table if exists proceso.pd_por_modelo purge;
+drop table if exists proceso.pd_por_modelo_{IDUNICO} purge;
 
-create table proceso.pd_por_modelo
+create table proceso.pd_por_modelo_{IDUNICO}
 stored as parquet
 as
 with series as (
@@ -149,4 +149,4 @@ group by
   b.escala,
   b.bin;
 
-compute stats proceso.pd_por_modelo;
+compute stats proceso.pd_por_modelo_{IDUNICO};

@@ -1,5 +1,5 @@
 -- ============================================================================
--- LECTURA: proceso.migracion_pd_r1
+-- LECTURA: proceso.migracion_pd_r1_{IDUNICO}
 -- ----------------------------------------------------------------------------
 -- Matriz de deciles de PD, rezago 1 mes. Los deciles son por período:
 -- mide reordenamiento del ranking, no desplazamiento de la distribución.
@@ -30,4 +30,4 @@ select
   t.decil_destino,
   t.categoria,
   t.clientes
-from proceso.migracion_pd_r1 t;
+from proceso.migracion_pd_r1_{IDUNICO} t;

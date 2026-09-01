@@ -1,10 +1,10 @@
 -- ============================================================================
--- CONSTRUCCIÓN: proceso.distribucion_grupo
+-- CONSTRUCCIÓN: proceso.distribucion_grupo_{IDUNICO}
 -- ----------------------------------------------------------------------------
 -- Composición de la cartera por grupo de riesgo. Alimenta la barra apilada,
 -- el heatmap segmento x grupo y la vigencia de modelos.
 --
--- DEPENDE de proceso.largo_calificaciones. Ver 00_orden.md.
+-- DEPENDE de proceso.largo_calificaciones_{IDUNICO}. Ver 00_orden.md.
 --
 -- Nada de `pd`: solo hay dos PD por cliente, no 16, así que traerla con
 -- `producto` en el grano invitaba a sumar la misma PD doce veces. Ver
@@ -17,9 +17,9 @@
 -- SIN PARÁMETROS: toda la ventana disponible.
 -- ============================================================================
 
-drop table if exists proceso.distribucion_grupo purge;
+drop table if exists proceso.distribucion_grupo_{IDUNICO} purge;
 
-create table proceso.distribucion_grupo
+create table proceso.distribucion_grupo_{IDUNICO}
 stored as parquet
 as
 select
@@ -31,7 +31,7 @@ select
   l.grupo,
   l.modelo,
   count(*) as clientes
-from proceso.largo_calificaciones l
+from proceso.largo_calificaciones_{IDUNICO} l
 group by
   l.ingestion_year,
   l.ingestion_month,
@@ -41,4 +41,4 @@ group by
   l.grupo,
   l.modelo;
 
-compute stats proceso.distribucion_grupo;
+compute stats proceso.distribucion_grupo_{IDUNICO};

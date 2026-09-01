@@ -1,5 +1,5 @@
 -- ============================================================================
--- CONSTRUCCIÓN: proceso.base_clientes
+-- CONSTRUCCIÓN: proceso.base_clientes_{IDUNICO}
 -- ----------------------------------------------------------------------------
 -- Clientes por mes y segmento. Es el denominador de todo el tablero y la tabla
 -- contra la que reconcilian las entradas y salidas de la migración.
@@ -15,9 +15,9 @@
 -- SIN PARÁMETROS: toda la ventana disponible. La app filtra en pandas.
 -- ============================================================================
 
-drop table if exists proceso.base_clientes purge;
+drop table if exists proceso.base_clientes_{IDUNICO} purge;
 
-create table proceso.base_clientes
+create table proceso.base_clientes_{IDUNICO}
 stored as parquet
 as
 select
@@ -32,4 +32,4 @@ group by
   c.ingestion_month,
   c.segmento;
 
-compute stats proceso.base_clientes;
+compute stats proceso.base_clientes_{IDUNICO};

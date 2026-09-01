@@ -31,10 +31,23 @@ separarlas por `;` y ejecutarlas en secuencia — `impala-shell -f` lo hace solo
 leen de ella. El detalle de dependencias está en
 `sql/20_construccion/00_orden.md`.
 
-> **La construcción no es concurrente.** El `drop`+`create` deja cada tabla
-> inexistente mientras dura: si otra persona construye a la vez, o alguien
-> tiene la app abierta y fuerza una relectura, se rompe. Es un proceso manual
-> y coordinado.
+También se puede correr **desde la app**, en la página **Construcción**: tiene
+el estado de cada tabla (si existe, cuántas filas, hasta qué mes llega), un
+botón por script y uno para todo, con log y barra de progreso. Si un script
+falla se detiene ahí, porque los que siguen pueden depender de él.
+
+### El identificador de versión
+
+Las tablas llevan un sufijo: `proceso.distribucion_grupo_vfinal`. Sale de
+`IDUNICO_POR_DEFECTO` en `app/data.py` y se puede cambiar desde la página de
+Construcción, para armar una versión de prueba sin tocar la que está en uso.
+
+> **Construcción y lectura tienen que usar el mismo identificador**, o la app
+> lee tablas que no existen.
+
+> El `drop`+`create` deja cada tabla inexistente mientras dura, pero dos
+> personas con identificadores **distintos** no se pisan. El conflicto solo
+> aparece si comparten identificador: ahí conviene avisar antes.
 
 Después de construir, abrir la página **Salud del dato** y activar el chequeo
 de mapeo: es la única defensa contra un `CASE` desalineado, que no da error.

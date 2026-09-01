@@ -167,18 +167,29 @@ Los CTEs internos siguen existiendo dentro de cada `CREATE TABLE AS`: la regla
 de no usar subconsultas en el `FROM` se mantiene. Lo que cambia es que los
 pasos intermedios ahora pueden ser tablas físicas.
 
-### La construcción NO es concurrente
+### El identificador de versión, y qué problema resuelve
 
-El `drop` + `create` deja la tabla **inexistente** mientras dura. Si dos
-personas construyen a la vez, o alguien construye mientras la app lee, se
-rompe: la segunda escritura se pisa con la primera, o la app falla con "table
-does not exist".
+Cada tabla lleva un sufijo que sale del marcador `{IDUNICO}`:
+`proceso.distribucion_grupo_vfinal`. El valor vive en `IDUNICO_POR_DEFECTO`
+(`app/data.py`) y la página de Construcción lo cambia por sesión.
 
-No hay bloqueo ni transacción que lo impida. **La construcción es un proceso
-manual y controlado**: una persona, avisando, y sin nadie leyendo. Si algún día
-molesta, el patrón es construir en `_nueva` y hacer swap con dos
-`alter table ... rename`; no está implementado porque hoy es mensual y
-coordinada.
+**Construcción y lectura tienen que usar el mismo valor**, o la app consulta
+tablas que no existen. Por eso está en un solo lugar.
+
+Solo letras, números y guion bajo: va **directo al nombre de una tabla en un
+DDL**, donde no hay parámetro ligado posible — no se puede parametrizar un
+nombre de objeto. La validación de `data.validar_idunico()` es la única
+defensa que hay.
+
+**Con eso la concurrencia deja de ser un problema general.** El `drop`+`create`
+sigue dejando la tabla inexistente mientras dura, pero dos personas con
+identificadores distintos escriben en tablas distintas y no se pisan. El
+conflicto queda solo si **comparten identificador**: ahí dos construcciones
+simultáneas se pisan, y alguien leyendo esa versión recibe "table does not
+exist".
+
+Regla práctica: para probar, identificador propio (`v2_prueba`, `vjuan`);
+reconstruir el compartido sigue siendo un acto coordinado.
 
 ## Reglas de código SQL
 

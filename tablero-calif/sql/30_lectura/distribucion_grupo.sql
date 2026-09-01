@@ -1,5 +1,5 @@
 -- ============================================================================
--- LECTURA: proceso.distribucion_grupo
+-- LECTURA: proceso.distribucion_grupo_{IDUNICO}
 -- ----------------------------------------------------------------------------
 -- Composición de la cartera por grupo de riesgo.
 --
@@ -27,4 +27,4 @@ select
   t.grupo,
   t.modelo,
   t.clientes
-from proceso.distribucion_grupo t;
+from proceso.distribucion_grupo_{IDUNICO} t;

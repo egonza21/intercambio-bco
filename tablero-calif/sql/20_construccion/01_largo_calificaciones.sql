@@ -1,5 +1,5 @@
 -- ============================================================================
--- CONSTRUCCIÓN: proceso.largo_calificaciones
+-- CONSTRUCCIÓN: proceso.largo_calificaciones_{IDUNICO}
 -- ----------------------------------------------------------------------------
 -- Materializa el unpivot. Es la tabla intermedia sobre la que se apoyan los
 -- agregados que necesitan el detalle por producto, y la razón principal por la
@@ -38,9 +38,9 @@
 -- valida sql/00_perfilado/validacion_mapeo.sql.
 -- ============================================================================
 
-drop table if exists proceso.largo_calificaciones purge;
+drop table if exists proceso.largo_calificaciones_{IDUNICO} purge;
 
-create table proceso.largo_calificaciones
+create table proceso.largo_calificaciones_{IDUNICO}
 stored as parquet
 as
 with productos as (
@@ -123,4 +123,4 @@ where r.grupo is not null;
 
 -- Sin estadísticas, Impala elige planes de join malos. Se nota sobre todo en
 -- la migración, que cruza esta tabla contra sí misma.
-compute stats proceso.largo_calificaciones;
+compute stats proceso.largo_calificaciones_{IDUNICO};

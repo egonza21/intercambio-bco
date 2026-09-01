@@ -73,24 +73,48 @@ join malos, y se nota sobre todo en las tablas que se cruzan: la migración une
 **El `purge` tampoco.** Sin él la tabla vieja va al trash de HDFS y el espacio
 no se libera hasta que pase la retención.
 
-## Esto NO es concurrente
+## El identificador de versión
 
-El `drop` + `create` deja la tabla **inexistente** durante toda la
-construcción. Mientras corre:
+Los nombres llevan un sufijo que sale del marcador `{IDUNICO}`:
 
-- Si otra persona construye a la vez, las dos escrituras se pisan y el
+```
+proceso.largo_calificaciones_vfinal
+proceso.distribucion_grupo_vfinal
+```
+
+El valor sale de `IDUNICO_POR_DEFECTO` en `app/data.py`, y la página de
+**Construcción** de la app lo puede cambiar por sesión.
+
+**Construcción y lectura tienen que usar el mismo valor.** Si difieren, la app
+consulta tablas que no existen. Por eso el valor vive en un solo lugar y las
+dos capas lo toman de ahí.
+
+Solo se aceptan letras, números y guion bajo: el identificador va **directo al
+nombre de una tabla en un DDL**, y ahí no hay parámetro ligado que valga — no
+existe forma de parametrizar un nombre de objeto. La validación es la única
+defensa, y está en `data.validar_idunico()`.
+
+## Concurrencia
+
+El `drop` + `create` deja la tabla **inexistente** mientras dura. Pero el
+identificador acota el problema: **dos personas con identificadores distintos
+escriben en tablas distintas y no se pisan.**
+
+El conflicto queda solo cuando **comparten identificador**:
+
+- Dos construcciones simultáneas sobre el mismo identificador se pisan y el
   resultado queda indefinido.
-- Si alguien tiene la app abierta y toca un filtro que fuerza relectura, le va
-  a fallar la consulta con "table does not exist".
+- Alguien con la app abierta en ese identificador, que fuerce una relectura
+  mientras corre, recibe "table does not exist".
 
-La construcción es un proceso **manual y controlado**: una persona, avisando, y
-sin nadie leyendo. No hay bloqueo ni transacción que lo impida — la disciplina
-es lo único que hay.
+Así que la regla práctica es: para probar algo, usar un identificador propio
+(`v2_prueba`, `vjuan`) y no tocar el que está en uso. Reconstruir el
+identificador compartido sigue siendo un acto coordinado — avisar antes.
 
-Si esto se vuelve un problema, el patrón habitual es construir en una tabla
-`_nueva` y hacer el swap con dos `alter table ... rename`, que reduce la
-ventana de inexistencia a milisegundos. No está implementado porque hoy la
-construcción es mensual y coordinada.
+Si algún día hace falta que ni siquiera eso interrumpa, el patrón es construir
+en `_nueva` y hacer swap con dos `alter table ... rename`, que reduce la
+ventana de inexistencia a milisegundos. No está implementado porque con
+identificadores separados el caso ya casi no aparece.
 
 ## Después de construir
 

@@ -1,5 +1,5 @@
 -- ============================================================================
--- CONSTRUCCIÓN: proceso.migracion_pd_r1
+-- CONSTRUCCIÓN: proceso.migracion_pd_r1_{IDUNICO}
 -- ----------------------------------------------------------------------------
 -- Matriz de migración de DECILES DE PD con rezago de 1 mes.
 --
@@ -22,9 +22,9 @@
 -- SIN PARÁMETROS de fecha: toda la ventana disponible.
 -- ============================================================================
 
-drop table if exists proceso.migracion_pd_r1 purge;
+drop table if exists proceso.migracion_pd_r1_{IDUNICO} purge;
 
-create table proceso.migracion_pd_r1
+create table proceso.migracion_pd_r1_{IDUNICO}
 stored as parquet
 as
 with series as (
@@ -190,4 +190,4 @@ group by
   c.decil_destino,
   c.categoria;
 
-compute stats proceso.migracion_pd_r1;
+compute stats proceso.migracion_pd_r1_{IDUNICO};

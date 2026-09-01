@@ -15,6 +15,7 @@ import streamlit as st
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import data  # noqa: E402
 import theme  # noqa: E402
 
 st.set_page_config(
@@ -75,6 +76,12 @@ def barra_lateral() -> None:
             format_func=theme.etiqueta_mes_idx, key="f_mes"))
 
         st.markdown("---")
+        # El identificador tiene que estar a la vista en todas las páginas: los
+        # números salen de las tablas de ESA versión y no de otra.
+        st.markdown(
+            f'<p class="nota">Versión de tablas<br>'
+            f'<code style="font-size:.95em">{data.idunico()}</code></p>',
+            unsafe_allow_html=True)
         st.markdown(
             '<p class="nota">Los agregados se cachean una hora. Para forzar '
             'una relectura de Impala, usá <b>C</b> y luego «Clear cache».</p>',
@@ -91,5 +98,7 @@ paginas = [
     st.Page("pages/2_evolucion.py", title="Evolución", icon="📈"),
     st.Page("pages/3_migracion.py", title="Migración", icon="🔀"),
     st.Page("pages/4_modelos.py", title="Modelos", icon="🧮"),
+    # Administración, al final: no se entra acá para mirar números.
+    st.Page("pages/9_construccion.py", title="Construcción", icon="⚙️"),
 ]
 st.navigation(paginas).run()

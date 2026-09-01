@@ -18,6 +18,7 @@ import theme
 _SQL = Path(__file__).resolve().parent.parent / "sql"
 DIR_LECTURA = _SQL / "30_lectura"
 DIR_PERFILADO = _SQL / "00_perfilado"
+DIR_CONSTRUCCION = _SQL / "20_construccion"
 
 # Esquema donde vive la capa construida. Un solo lugar.
 ESQUEMA = "proceso"
@@ -38,6 +39,20 @@ TTL = 3600  # una hora
 DSN = "impala-virtual-prd"
 USUARIO = "efgon"
 
+# Identificador de versión que se agrega al nombre de cada tabla construida:
+#     proceso.distribucion_grupo_vfinal
+#
+# Construcción y lectura TIENEN que usar el mismo valor. Si difieren, la app
+# lee tablas que no existen. Por eso vive acá y no en dos lados.
+#
+# Cambiarlo permite construir una versión de prueba sin tocar la que está en
+# uso, y de paso resuelve la concurrencia: dos personas con identificadores
+# distintos escriben en tablas distintas y no se pisan.
+#
+# La página de administración lo puede sobreescribir por sesión; el valor
+# efectivo sale siempre de idunico(), nunca de esta constante directamente.
+IDUNICO_POR_DEFECTO = "vfinal"
+
 # Formato en que el helper espera los parámetros dentro del SQL.
 # Los .sql traen {DESDE}, {HASTA}, {REZAGO} y acá se traducen a este molde.
 # Si el helper usa otro estilo, se cambia esta única constante:
@@ -47,17 +62,93 @@ USUARIO = "efgon"
 FORMATO_PARAMETRO = "{{{nombre}}}"
 
 
-def _ejecutar(consulta: str, parametros: dict[str, str]) -> pd.DataFrame:
-    """Ejecuta la consulta contra Impala. Único lugar que llama al helper."""
+def _helper():
     from helper import Helper
 
-    hp = Helper(dsn=DSN, username=USUARIO)
-    return hp.obtener_dataframe(consulta, parametros)
+    return Helper(dsn=DSN, username=USUARIO)
+
+
+def _ejecutar(consulta: str, parametros: dict[str, str]) -> pd.DataFrame:
+    """Ejecuta una consulta que DEVUELVE filas."""
+    return _helper().obtener_dataframe(consulta, parametros)
+
+
+# Métodos candidatos para DDL, en orden de preferencia. `obtener_dataframe`
+# espera devolver filas y un drop o un create no devuelven nada: según cómo
+# esté implementado, puede fallar o devolver vacío. No se pudo verificar qué
+# expone el helper -- no está instalado en el entorno donde se escribió esto --
+# así que se elige el primero que exista y, si no hay ninguno, se cae a
+# obtener_dataframe, que es el comportamiento anterior.
+_METODOS_DDL = ("ejecutar", "ejecutar_sentencia", "execute", "ejecutar_ddl")
+
+
+def _ejecutar_ddl(sentencia: str) -> None:
+    """Ejecuta una sentencia SIN retorno (drop, create table as, compute stats).
+
+    Si el helper resulta exponer otro nombre, se agrega a _METODOS_DDL y no hay
+    que tocar nada más."""
+    hp = _helper()
+    for nombre in _METODOS_DDL:
+        metodo = getattr(hp, nombre, None)
+        if callable(metodo):
+            metodo(sentencia)
+            return
+    hp.obtener_dataframe(sentencia, {})
+
+
+def metodo_ddl_detectado() -> str:
+    """Qué método usaría _ejecutar_ddl. Lo muestra la página de
+    administración, para no tener que adivinarlo mirando el código."""
+    try:
+        hp = _helper()
+    except Exception as e:
+        return f"no se pudo instanciar el helper: {e}"
+    for nombre in _METODOS_DDL:
+        if callable(getattr(hp, nombre, None)):
+            return f"Helper.{nombre}()"
+    return "Helper.obtener_dataframe() (no se encontró un método sin retorno)"
 
 
 # ===========================================================================
 # ||   Fin del bloque acoplado al helper. Lo de abajo es SQL puro y pandas ||
 # ===========================================================================
+
+
+# --- identificador de versión ----------------------------------------------
+
+_IDUNICO_VALIDO = re.compile(r"^[A-Za-z0-9_]+$")
+
+
+def validar_idunico(valor: str) -> str:
+    """El identificador va DIRECTO al nombre de una tabla en un DDL, así que no
+    puede pasar por un parámetro ligado: no existe forma de parametrizar un
+    nombre de objeto. La única defensa es validarlo antes de interpolarlo.
+
+    Solo letras, números y guion bajo. Un espacio, una comilla o un punto y
+    coma romperían la sentencia, o algo peor."""
+    valor = (valor or "").strip()
+    if not valor:
+        raise ValueError("El identificador no puede estar vacío.")
+    if len(valor) > 40:
+        raise ValueError("El identificador no puede pasar de 40 caracteres.")
+    if not _IDUNICO_VALIDO.match(valor):
+        raise ValueError(
+            f"Identificador inválido: {valor!r}. Solo se permiten letras, "
+            f"números y guion bajo, sin espacios ni signos.")
+    return valor
+
+
+def idunico() -> str:
+    """El identificador efectivo. La página de administración lo puede
+    sobreescribir por sesión; si no lo hizo, vale el de la constante."""
+    valor = st.session_state.get("idunico", IDUNICO_POR_DEFECTO)
+    return validar_idunico(valor)
+
+
+def _resolver_idunico(sql: str, idu: str | None = None) -> str:
+    """Sustituye {IDUNICO} en los nombres de tabla. No es un parámetro ligado,
+    es interpolación de texto: por eso el valor pasa antes por validar."""
+    return sql.replace("{IDUNICO}", validar_idunico(idu or idunico()))
 
 
 def _a_parametros(sql: str) -> str:
@@ -75,17 +166,26 @@ def _leer_lectura(nombre: str) -> str:
         raise FileNotFoundError(
             f"No está la consulta de lectura {ruta}. ¿Se corrió "
             f"sql/20_construccion/? Ver 00_orden.md.")
-    return ruta.read_text(encoding="utf-8")
+    return _resolver_idunico(ruta.read_text(encoding="utf-8"))
 
 
+# `idu` entra como argumento y no se lee adentro a propósito: es parte de la
+# CLAVE del caché. Sin eso, cambiar de identificador devolvería las filas
+# cacheadas de la versión anterior.
 @st.cache_data(ttl=TTL, show_spinner="Leyendo la tabla construida...")
-def _tabla(nombre: str) -> pd.DataFrame:
+def _tabla_cacheada(nombre: str, idu: str) -> pd.DataFrame:
     """Trae una tabla de la capa construida, entera y sin filtros.
 
     Una sola llamada a Impala por tabla y por hora. Todo el filtrado de la app
     (ventana de meses, producto, segmento) pasa después en pandas, así que
     mover un selector del sidebar no vuelve a consultar."""
-    return _con_mes(_ejecutar(_leer_lectura(nombre), {}))
+    ruta = DIR_LECTURA / f"{nombre}.sql"
+    sql = _resolver_idunico(ruta.read_text(encoding="utf-8"), idu)
+    return _con_mes(_ejecutar(sql, {}))
+
+
+def _tabla(nombre: str) -> pd.DataFrame:
+    return _tabla_cacheada(nombre, idunico())
 
 
 def _leer_perfilado(nombre: str, sentencia: int = 0) -> str:
@@ -252,6 +352,69 @@ MODELOS_CONOCIDOS = {
     "ADVANCE_1_1", "ADVANCE_INCLUSION", "T1_COMPORT", "T1_COMPORT_NEI",
     "T1_COMPORT_SOCIAL", "T2", "T3_MARCAS", "T_2_3",
 }
+
+
+# --- construcción ----------------------------------------------------------
+
+def scripts_construccion() -> list[Path]:
+    """Los scripts de 20_construccion/, en orden. El prefijo numérico ES el
+    orden y hay dependencias reales: 01 tiene que existir antes que 04, 06, 07
+    y 08. Ver sql/20_construccion/00_orden.md."""
+    return sorted(DIR_CONSTRUCCION.glob("*.sql"))
+
+
+def sentencias(ruta: Path, idu: str | None = None) -> list[str]:
+    """Parte un .sql en sentencias ejecutables.
+
+    Quita los comentarios de línea ANTES de partir por punto y coma. El orden
+    importa: estos archivos tienen encabezados largos, y un ';' dentro de un
+    comentario partiría la sentencia por la mitad y dejaría dos fragmentos
+    inválidos.
+    """
+    crudo = ruta.read_text(encoding="utf-8")
+    codigo = "\n".join(l for l in crudo.splitlines()
+                       if not l.strip().startswith("--"))
+    return [_resolver_idunico(p.strip(), idu)
+            for p in codigo.split(";") if p.strip()]
+
+
+def construir(ruta: Path, idu: str | None = None) -> int:
+    """Ejecuta un script de construcción. Devuelve cuántas sentencias corrió.
+
+    Las sentencias van EN SECUENCIA, una llamada por cada una: no se asume que
+    el helper acepte varias juntas. Si alguna falla, la excepción sube sin
+    tocar: quien llama decide si sigue o se detiene."""
+    ejecutadas = 0
+    for s in sentencias(ruta, idu):
+        _ejecutar_ddl(s)
+        ejecutadas += 1
+    return ejecutadas
+
+
+TABLAS_CONSTRUIDAS = [
+    "largo_calificaciones", "base_clientes", "cobertura_producto",
+    "distribucion_grupo", "pd_por_modelo", "cortes_por_producto",
+    "migracion_r1", "migracion_r6", "migracion_pd_r1", "migracion_pd_r6",
+]
+
+
+def estado_tabla(nombre: str, idu: str | None = None) -> dict:
+    """Existe, cuántas filas y hasta qué mes llega. Una consulta por tabla.
+
+    Sin caché a propósito: es justamente el dato que tiene que cambiar cuando
+    se termina de construir."""
+    idu = validar_idunico(idu or idunico())
+    tabla = f"{ESQUEMA}.{nombre}_{idu}"
+    try:
+        df = _ejecutar(
+            f"select count(*) as filas, max(idx_mes) as ult_mes from {tabla}", {})
+    except Exception as e:
+        return {"tabla": tabla, "existe": False, "filas": None,
+                "ult_mes": None, "error": str(e)}
+    filas = int(df["filas"].iloc[0]) if not df.empty else 0
+    ult = df["ult_mes"].iloc[0] if not df.empty else None
+    return {"tabla": tabla, "existe": True, "filas": filas,
+            "ult_mes": int(ult) if pd.notna(ult) else None, "error": None}
 
 
 def meses_disponibles(df: pd.DataFrame) -> list[int]:

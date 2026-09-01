@@ -1,9 +1,9 @@
 -- ============================================================================
--- CONSTRUCCIÓN: proceso.migracion_r1
+-- CONSTRUCCIÓN: proceso.migracion_r1_{IDUNICO}
 -- ----------------------------------------------------------------------------
 -- Matriz de migración de grupo con rezago de 1 mes.
 --
--- DEPENDE de proceso.largo_calificaciones. Ver 00_orden.md.
+-- DEPENDE de proceso.largo_calificaciones_{IDUNICO}. Ver 00_orden.md.
 --
 -- El rezago NO se parametriza: se construyen DOS tablas, migracion_r1 y
 -- migracion_r6. Son análisis distintos y NO encadenables -- las matrices
@@ -33,15 +33,15 @@
 -- SIN PARÁMETROS de fecha: toda la ventana disponible.
 -- ============================================================================
 
-drop table if exists proceso.migracion_r1 purge;
+drop table if exists proceso.migracion_r1_{IDUNICO} purge;
 
-create table proceso.migracion_r1
+create table proceso.migracion_r1_{IDUNICO}
 stored as parquet
 as
 with destino as (
   select
     l.num_doc, l.tipo_doc, l.segmento, l.producto, l.idx_mes, l.grupo_base
-  from proceso.largo_calificaciones l
+  from proceso.largo_calificaciones_{IDUNICO} l
 ),
 
 origen as (
@@ -49,7 +49,7 @@ origen as (
     l.num_doc, l.tipo_doc, l.segmento, l.producto,
     l.idx_mes + 1 as idx_mes_destino,
     l.grupo_base
-  from proceso.largo_calificaciones l
+  from proceso.largo_calificaciones_{IDUNICO} l
 ),
 
 base_mes as (
@@ -129,4 +129,4 @@ group by
   c.grupo_base_destino,
   c.categoria;
 
-compute stats proceso.migracion_r1;
+compute stats proceso.migracion_r1_{IDUNICO};

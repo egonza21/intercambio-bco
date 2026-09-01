@@ -1,5 +1,5 @@
 -- ============================================================================
--- LECTURA: proceso.migracion_r1
+-- LECTURA: proceso.migracion_r1_{IDUNICO}
 -- ----------------------------------------------------------------------------
 -- Matriz de migración de grupo, rezago 1 mes: mide ROTACIÓN.
 --
@@ -29,4 +29,4 @@ select
   t.grupo_base_destino,
   t.categoria,
   t.clientes
-from proceso.migracion_r1 t;
+from proceso.migracion_r1_{IDUNICO} t;

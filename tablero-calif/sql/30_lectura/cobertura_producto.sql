@@ -1,5 +1,5 @@
 -- ============================================================================
--- LECTURA: proceso.cobertura_producto
+-- LECTURA: proceso.cobertura_producto_{IDUNICO}
 -- ----------------------------------------------------------------------------
 -- Cobertura por producto, en salida ANCHA: 16 columnas cob_*, una por producto.
 -- La app la despivota en pandas.
@@ -41,4 +41,4 @@ select
   t.cob_sufi_cpe,
   t.cob_sufi_con,
   t.cob_calm
-from proceso.cobertura_producto t;
+from proceso.cobertura_producto_{IDUNICO} t;

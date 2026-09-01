@@ -190,7 +190,8 @@ class Doc:
             f'<nav class="indice" id="indice"><p>Contenido</p><ol>{idx}</ol></nav>'
             + "".join(self.partes) +
             '<footer>Generado desde el repo de calificaciones. Los agregados '
-            'salen de <code>sql/10_agregados/</code>; las figuras, de '
+            'salen de las tablas construidas por <code>sql/20_construccion/</code>; '
+            'las figuras, de '
             '<code>app/charts.py</code>, las mismas que muestra la app.<br>'
             'Este archivo contiene datos: no subirlo al repositorio.</footer>'
             "</div></body></html>")
@@ -355,6 +356,7 @@ def construir(desde: int, hasta: int, mes: int, rezago: int) -> str:
         "Calificaciones de riesgo — seguimiento de modelos",
         f"Ventana {theme.etiqueta_mes_idx(desde)} a {theme.etiqueta_mes_idx(hasta)} · "
         f"corte {theme.etiqueta_mes_idx(mes)} · rezago {rezago} · "
+        f"versión de tablas <code>{data.idunico()}</code> · "
         f"generado el {generado}")
 
 

@@ -1,5 +1,5 @@
 -- ============================================================================
--- CONSTRUCCIÓN: proceso.cobertura_producto
+-- CONSTRUCCIÓN: proceso.cobertura_producto_{IDUNICO}
 -- ----------------------------------------------------------------------------
 -- Cobertura por producto, en salida ANCHA: 16 columnas cob_*, una por
 -- producto. La app la despivota en pandas.
@@ -22,9 +22,9 @@
 -- SIN PARÁMETROS: toda la ventana disponible.
 -- ============================================================================
 
-drop table if exists proceso.cobertura_producto purge;
+drop table if exists proceso.cobertura_producto_{IDUNICO} purge;
 
-create table proceso.cobertura_producto
+create table proceso.cobertura_producto_{IDUNICO}
 stored as parquet
 as
 select
@@ -55,4 +55,4 @@ group by
   c.ingestion_month,
   c.segmento;
 
-compute stats proceso.cobertura_producto;
+compute stats proceso.cobertura_producto_{IDUNICO};

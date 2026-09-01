@@ -1,5 +1,5 @@
 -- ============================================================================
--- LECTURA: proceso.cortes_por_producto
+-- LECTURA: proceso.cortes_por_producto_{IDUNICO}
 -- ----------------------------------------------------------------------------
 -- Fronteras de corte de PD por producto y grupo, con la marca de solapamiento.
 --
@@ -30,4 +30,4 @@ select
   t.pd_max,
   t.pd_max_grupo_previo,
   t.solapa
-from proceso.cortes_por_producto t;
+from proceso.cortes_por_producto_{IDUNICO} t;

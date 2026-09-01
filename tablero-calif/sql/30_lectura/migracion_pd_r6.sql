@@ -1,5 +1,5 @@
 -- ============================================================================
--- LECTURA: proceso.migracion_pd_r6
+-- LECTURA: proceso.migracion_pd_r6_{IDUNICO}
 -- ----------------------------------------------------------------------------
 -- Matriz de deciles de PD, rezago 6 meses.
 --
@@ -29,4 +29,4 @@ select
   t.decil_destino,
   t.categoria,
   t.clientes
-from proceso.migracion_pd_r6 t;
+from proceso.migracion_pd_r6_{IDUNICO} t;
