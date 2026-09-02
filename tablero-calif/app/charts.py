@@ -87,7 +87,12 @@ def composicion_grupo(df: pd.DataFrame, familia: str | None = None,
 
     fig = go.Figure()
     for grupo in _grupos_ordenados(piv["grupo"]):
-        s = piv[piv["grupo"] == grupo].set_index("producto").reindex(orden_prod)
+        # fillna(0) NO es cosmético: en una barra apilada Plotly trata el NaN
+        # como HUECO, no como cero, y el apilado se corre. Un producto sin G1
+        # ni G2 pero con G8 mostraba el G8 pegado al eje, como si fuera el
+        # primer grupo. El customdata ya lo tenía; el share no.
+        s = (piv[piv["grupo"] == grupo].set_index("producto")
+             .reindex(orden_prod).fillna(0))
         fig.add_bar(
             y=orden_prod, x=s["share"].values, name=grupo, orientation="h",
             marker=dict(color=theme.COLOR_GRUPO.get(grupo, theme.INK_MUTED),
@@ -247,7 +252,10 @@ def mezcla_riesgo(df: pd.DataFrame, producto: str) -> go.Figure:
 
     fig = go.Figure()
     for grupo in _grupos_ordenados(g["grupo"]):
-        s = g[g["grupo"] == grupo].set_index("idx_mes").reindex(meses)
+        # Misma razón que en composicion_grupo: es un área APILADA y el NaN
+        # rompe la geometría del apilado. Un grupo ausente en un mes es 0%.
+        s = (g[g["grupo"] == grupo].set_index("idx_mes")
+             .reindex(meses).fillna(0))
         fig.add_scatter(
             x=etiquetas, y=s["share"].values, name=grupo,
             mode="lines", stackgroup="riesgo", groupnorm="fraction",
@@ -278,7 +286,10 @@ def base_clientes_tiempo(df: pd.DataFrame) -> go.Figure:
 
     fig = go.Figure()
     for i, seg in enumerate(segmentos):
-        s = g[g["segmento"] == seg].set_index("idx_mes").reindex(meses)
+        # Un segmento sin fila en un mes tiene 0 clientes, no un hueco: la
+        # línea tiene que bajar a cero y verse.
+        s = (g[g["segmento"] == seg].set_index("idx_mes")
+             .reindex(meses).fillna(0))
         fig.add_scatter(
             x=etiquetas, y=s["clientes"].values, name=seg, mode="lines",
             line=dict(color=theme.SERIES[i], width=2, dash=theme.SERIES_DASH[i]),
@@ -286,7 +297,7 @@ def base_clientes_tiempo(df: pd.DataFrame) -> go.Figure:
         )
     if otros:
         s = (g[g["segmento"].isin(otros)].groupby("idx_mes")["clientes"].sum()
-             .reindex(meses))
+             .reindex(meses).fillna(0))
         fig.add_scatter(
             x=etiquetas, y=s.values, name=f"otros ({len(otros)})", mode="lines",
             line=dict(color=theme.INK_MUTED, width=1.5, dash="dot"),
@@ -317,14 +328,18 @@ def vigencia_modelos(df: pd.DataFrame) -> go.Figure:
 
     fig = go.Figure()
     for i, mod in enumerate(principales):
-        s = g[g["modelo"] == mod].set_index("idx_mes").reindex(meses)
+        # Un modelo que deja de usarse cae a 0% y eso tiene que VERSE: con
+        # hueco, la línea desaparece y parece que no hay dato.
+        s = (g[g["modelo"] == mod].set_index("idx_mes")
+             .reindex(meses).fillna(0))
         fig.add_scatter(
             x=etiquetas, y=s["share"].values, name=mod, mode="lines",
             line=dict(color=theme.SERIES[i], width=2, dash=theme.SERIES_DASH[i]),
             hovertemplate=mod + " · %{y:.1%} de la población<extra></extra>",
         )
     if resto:
-        s = (g[g["modelo"].isin(resto)].groupby("idx_mes")["share"].sum().reindex(meses))
+        s = (g[g["modelo"].isin(resto)].groupby("idx_mes")["share"].sum()
+             .reindex(meses).fillna(0))
         fig.add_scatter(
             x=etiquetas, y=s.values, name=f"otros ({len(resto)})", mode="lines",
             line=dict(color=theme.INK_MUTED, width=1.5, dash="dot"),
@@ -776,6 +791,11 @@ def _grafico_psi(s: pd.DataFrame, columna_serie: str, titulo_y: str,
 
     fig = go.Figure()
     for i, nombre in enumerate(elegidas):
+        # SIN fillna(0), a diferencia del resto del archivo. Acá el hueco es
+        # lo correcto: que un modelo no tenga PSI en un mes significa que no se
+        # pudo calcular (le faltan datos, o no tiene dos meses para comparar).
+        # Poner 0 afirmaría "no hubo deriva", que es una mentira distinta del
+        # silencio. Es una línea, no un apilado, así que el hueco no rompe nada.
         sub = s[s[columna_serie] == nombre].set_index("idx_mes").reindex(meses)
         fig.add_scatter(
             x=etiquetas, y=sub["psi"].values, name=str(nombre),

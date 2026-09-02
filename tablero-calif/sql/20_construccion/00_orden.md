@@ -116,6 +116,45 @@ en `_nueva` y hacer swap con dos `alter table ... rename`, que reduce la
 ventana de inexistencia a milisegundos. No está implementado porque con
 identificadores separados el caso ya casi no aparece.
 
+## Los cuatro scripts de migración crean tablas temporales
+
+`07`, `08`, `09` y `10` no son un solo `CREATE TABLE AS`: parten el trabajo en
+tablas intermedias materializadas, con el prefijo `tmp_`.
+
+```
+proceso.tmp_migracion_r1_origen_<id>       proceso.tmp_migracion_pd_r1_deciles_<id>
+proceso.tmp_migracion_r1_destino_<id>      proceso.tmp_migracion_pd_r1_base_<id>
+proceso.tmp_migracion_r1_base_<id>         proceso.tmp_migracion_pd_r1_par_<id>
+proceso.tmp_migracion_r1_par_<id>
+```
+
+**Por qué.** Encadenado en CTEs, el ETL de migración se cancelaba por memoria:
+Impala no materializa los CTEs, así que el full outer join, el left join
+contra la base y la agregación final quedaban todos en el mismo plan con los
+intermedios en memoria. En la de PD había además un `ntile` que, por estar el
+CTE referenciado dos veces, corría el sort completo **dos veces**.
+
+**El `compute stats` de cada intermedia va antes del join que la usa.** No es
+higiene: es buena parte de la ganancia. Con estadísticas Impala conoce los
+tamaños y elige entre broadcast y particionado; sin ellas adivina, y un
+broadcast de la tabla equivocada es justamente lo que revienta la memoria.
+
+### Se borran solas, salvo que el script se interrumpa
+
+Cada script borra sus intermedias al final, cuando la tabla definitiva ya
+existe. **Si se interrumpe a la mitad quedan huérfanas ocupando espacio.**
+
+Los `drop table if exists ... purge` del arranque de cada script las limpian en
+la corrida siguiente, así que volver a correrlo alcanza. Para revisarlas a
+mano:
+
+```sql
+show tables in proceso like 'tmp_migracion*';
+```
+
+Como llevan el sufijo del identificador, una huérfana de `v2_prueba` no
+interfiere con `vfinal`: se pueden borrar sin coordinar con nadie más.
+
 ## Después de construir
 
 Correr la página **Salud del dato** de la app antes de mirar cualquier otra

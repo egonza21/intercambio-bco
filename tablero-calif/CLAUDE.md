@@ -163,6 +163,12 @@ join malos, y se nota en las tablas que se cruzan — la migración une
 Son tres sentencias, no una: si el cliente no acepta varias por llamada, hay
 que separarlas y ejecutarlas en secuencia.
 
+**Los cuatro scripts de migración son la excepción**: crean tablas intermedias
+`tmp_*` porque encadenado en CTEs el ETL se cancelaba por memoria. Las borran
+al final, pero si el script se interrumpe quedan huérfanas; los `drop` del
+arranque las limpian en la corrida siguiente. Ver
+`sql/20_construccion/00_orden.md`.
+
 Los CTEs internos siguen existiendo dentro de cada `CREATE TABLE AS`: la regla
 de no usar subconsultas en el `FROM` se mantiene. Lo que cambia es que los
 pasos intermedios ahora pueden ser tablas físicas.

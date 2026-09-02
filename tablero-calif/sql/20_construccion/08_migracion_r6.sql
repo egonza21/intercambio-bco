@@ -5,17 +5,42 @@
 --
 -- DEPENDE de proceso.largo_calificaciones_{IDUNICO}. Ver 00_orden.md.
 --
--- El rezago NO se parametriza: se construyen DOS tablas, migracion_r1 y
--- migracion_r6. Son análisis distintos y NO encadenables -- las matrices
--- mensuales no se suman para obtener la semestral, porque un cliente que va
--- G3 -> G4 -> G3 aporta dos movimientos en las mensuales y cero en la
--- semestral. La mensual mide rotación; la semestral, desplazamiento neto.
+-- ----------------------------------------------------------------------------
+-- POR QUÉ ESTÁ PARTIDO EN TABLAS INTERMEDIAS
+-- ----------------------------------------------------------------------------
+-- La versión anterior era un solo CREATE TABLE AS con todo encadenado en CTEs,
+-- y se cancelaba por memoria: Impala no materializa los CTEs, así que el
+-- full outer join, el left join contra la base y la agregación final quedaban
+-- todos en el mismo plan, con los datos intermedios en memoria.
 --
--- Los primeros 6 meses de la tabla no tienen mes de origen, así que
--- simplemente no producen filas: el full outer join no encuentra pareja y esos
--- meses no aparecen como destino. Antes esto era un borde peligroso porque el
--- rango se pasaba por parámetro y un rango mal puesto llenaba de "entrada"
--- falsas; construyendo todo el histórico el problema desaparece solo.
+-- Ahora cada paso pesado va a disco:
+--
+--   tmp_migracion_r6_origen     el lado origen, con el mes ya desplazado
+--   tmp_migracion_r6_destino    el lado destino
+--   tmp_migracion_r6_base       presencia del cliente por mes
+--   tmp_migracion_r6_par        el resultado del full outer join
+--
+-- El `compute stats` de cada intermedia va ANTES del join que la usa. Eso es
+-- buena parte de la ganancia: con estadísticas Impala sabe los tamaños y
+-- elige la estrategia de join (broadcast contra particionado) en vez de
+-- adivinar. Sin stats, un broadcast de la tabla equivocada es justamente lo
+-- que revienta la memoria.
+--
+-- Las intermedias se BORRAN al final, cuando la tabla definitiva ya existe. Si
+-- el script se interrumpe a la mitad pueden quedar huérfanas; los drop del
+-- arranque las limpian en la corrida siguiente.
+--
+-- ----------------------------------------------------------------------------
+-- {REZAGO}: mensual y semestral NO son encadenables
+-- ----------------------------------------------------------------------------
+-- Rezago 1 da la migración mensual; rezago 6, la semestral. Las mensuales NO
+-- se suman para obtener la semestral: un cliente que va G3 -> G4 -> G3 aporta
+-- dos movimientos en las mensuales y cero en la semestral. La mensual mide
+-- rotación; la semestral, desplazamiento neto.
+--
+-- Los primeros 6 meses no tienen mes de origen, así que no producen
+-- filas: el full outer join no encuentra pareja y esos meses no aparecen como
+-- destino.
 --
 -- LAS CATEGORÍAS
 --   movimiento             tiene grupo en los dos meses. Es la matriz.
@@ -23,82 +48,89 @@
 --   ganancia_elegibilidad  estaba, pero sin grupo en ESE producto.
 --   salida                 no está en la tabla en el mes destino.
 --   perdida_elegibilidad   está, pero sin grupo en ESE producto.
--- Separar cambio de población de decisión del modelo exige cruzar contra la
--- base de clientes del mes: de ahí el CTE base_mes, que lee la tabla ancha.
 --
--- MODELO ANTERIOR Y ACTUAL, por el mismo motivo que los dos segmentos: es lo
--- que permite distinguir reasignación de deriva sin construir una cohorte
--- fija. Si el PSI de un modelo sube y al mismo tiempo se ve un flujo grande de
--- clientes que cambiaron de modelo entre esos dos meses, el movimiento es de
--- asignación y no del modelo.
---
--- OJO CON EL TAMAÑO: son dos columnas más en el grano, y multiplican las filas
--- por las combinaciones modelo_anterior x modelo_actual que existan. Con ocho
--- modelos el techo teórico es 64x, aunque en la práctica la mayoría de los
--- clientes se queda en el mismo modelo y la matriz es casi diagonal. MEDIR el
--- conteo de filas después de la primera construcción antes de dar la ETL por
--- buena: la página de Construcción lo muestra.
---
--- DOS SEGMENTOS, no uno coalescido: un cliente que cambia de segmento no
--- cambió de riesgo, pero con una sola columna aparece como salida y entrada.
--- En `entrada` el segmento_anterior queda NULL; en `salida`, el actual.
---
--- SIN PARÁMETROS de fecha: toda la ventana disponible.
+-- DOS SEGMENTOS y DOS MODELOS, no coalescidos: un cliente que cambia de
+-- segmento no cambió de riesgo, y el par de modelos es lo que permite
+-- distinguir reasignación de deriva. OJO con el tamaño: son cuatro columnas
+-- más en el grano. MEDIR el conteo de filas tras la primera construcción.
 -- ============================================================================
 
+-- --- limpieza defensiva: intermedias de una corrida interrumpida ------------
+drop table if exists proceso.tmp_migracion_r6_origen_{IDUNICO} purge;
+drop table if exists proceso.tmp_migracion_r6_destino_{IDUNICO} purge;
+drop table if exists proceso.tmp_migracion_r6_base_{IDUNICO} purge;
+drop table if exists proceso.tmp_migracion_r6_par_{IDUNICO} purge;
+
+-- --- 1. lado destino --------------------------------------------------------
+create table proceso.tmp_migracion_r6_destino_{IDUNICO}
+stored as parquet
+as
+select
+  l.num_doc, l.tipo_doc, l.segmento, l.producto, l.idx_mes,
+  l.grupo_base, l.modelo
+from proceso.largo_calificaciones_{IDUNICO} l;
+
+compute stats proceso.tmp_migracion_r6_destino_{IDUNICO};
+
+-- --- 2. lado origen, con el mes ya desplazado -------------------------------
+create table proceso.tmp_migracion_r6_origen_{IDUNICO}
+stored as parquet
+as
+select
+  l.num_doc, l.tipo_doc, l.segmento, l.producto, l.modelo,
+  l.idx_mes + 6 as idx_mes_destino,
+  l.grupo_base
+from proceso.largo_calificaciones_{IDUNICO} l;
+
+compute stats proceso.tmp_migracion_r6_origen_{IDUNICO};
+
+-- --- 3. presencia del cliente por mes ---------------------------------------
+create table proceso.tmp_migracion_r6_base_{IDUNICO}
+stored as parquet
+as
+select
+  c.num_doc,
+  c.tipo_doc,
+  c.ingestion_year * 12 + c.ingestion_month as idx_mes
+from resultados_riesgos.maestro_calificaciones_pn c;
+
+compute stats proceso.tmp_migracion_r6_base_{IDUNICO};
+
+-- --- 4. el full outer join, materializado -----------------------------------
+create table proceso.tmp_migracion_r6_par_{IDUNICO}
+stored as parquet
+as
+select
+  coalesce(d.num_doc,  o.num_doc)          as num_doc,
+  coalesce(d.tipo_doc, o.tipo_doc)         as tipo_doc,
+  coalesce(d.producto, o.producto)         as producto,
+  o.segmento                               as segmento_anterior,
+  d.segmento                               as segmento_actual,
+  coalesce(d.idx_mes,  o.idx_mes_destino)  as idx_mes_destino,
+  o.grupo_base                             as grupo_base_origen,
+  d.grupo_base                             as grupo_base_destino,
+  o.modelo                                 as modelo_anterior,
+  d.modelo                                 as modelo_actual,
+  case
+    when d.num_doc is null then o.idx_mes_destino
+    when o.num_doc is null then d.idx_mes - 6
+  end                                      as idx_mes_presencia
+from proceso.tmp_migracion_r6_destino_{IDUNICO} d
+full outer join proceso.tmp_migracion_r6_origen_{IDUNICO} o
+  on  d.num_doc  = o.num_doc
+  and d.tipo_doc = o.tipo_doc
+  and d.producto = o.producto
+  and d.idx_mes  = o.idx_mes_destino;
+
+compute stats proceso.tmp_migracion_r6_par_{IDUNICO};
+
+-- --- 5. clasificación y agregado final --------------------------------------
 drop table if exists proceso.migracion_r6_{IDUNICO} purge;
 
 create table proceso.migracion_r6_{IDUNICO}
 stored as parquet
 as
-with destino as (
-  select
-    l.num_doc, l.tipo_doc, l.segmento, l.producto, l.idx_mes,
-    l.grupo_base, l.modelo
-  from proceso.largo_calificaciones_{IDUNICO} l
-),
-
-origen as (
-  select
-    l.num_doc, l.tipo_doc, l.segmento, l.producto, l.modelo,
-    l.idx_mes + 6 as idx_mes_destino,
-    l.grupo_base
-  from proceso.largo_calificaciones_{IDUNICO} l
-),
-
-base_mes as (
-  select
-    c.num_doc,
-    c.tipo_doc,
-    c.ingestion_year * 12 + c.ingestion_month as idx_mes
-  from resultados_riesgos.maestro_calificaciones_pn c
-),
-
-par as (
-  select
-    coalesce(d.num_doc,  o.num_doc)          as num_doc,
-    coalesce(d.tipo_doc, o.tipo_doc)         as tipo_doc,
-    coalesce(d.producto, o.producto)         as producto,
-    o.segmento                               as segmento_anterior,
-    d.segmento                               as segmento_actual,
-    coalesce(d.idx_mes,  o.idx_mes_destino)  as idx_mes_destino,
-    o.grupo_base                             as grupo_base_origen,
-    d.grupo_base                             as grupo_base_destino,
-    o.modelo                                 as modelo_anterior,
-    d.modelo                                 as modelo_actual,
-    case
-      when d.num_doc is null then o.idx_mes_destino
-      when o.num_doc is null then d.idx_mes - 6
-    end                                      as idx_mes_presencia
-  from destino d
-  full outer join origen o
-    on  d.num_doc  = o.num_doc
-    and d.tipo_doc = o.tipo_doc
-    and d.producto = o.producto
-    and d.idx_mes  = o.idx_mes_destino
-),
-
-clasificado as (
+with clasificado as (
   select
     p.producto,
     p.segmento_anterior,
@@ -118,8 +150,8 @@ clasificado as (
       when b.num_doc is null                      then 'salida'
       else                                             'perdida_elegibilidad'
     end as categoria
-  from par p
-  left join base_mes b
+  from proceso.tmp_migracion_r6_par_{IDUNICO} p
+  left join proceso.tmp_migracion_r6_base_{IDUNICO} b
     on  b.num_doc  = p.num_doc
     and b.tipo_doc = p.tipo_doc
     and b.idx_mes  = p.idx_mes_presencia
@@ -152,3 +184,9 @@ group by
   c.categoria;
 
 compute stats proceso.migracion_r6_{IDUNICO};
+
+-- --- 6. las intermedias ya no hacen falta ------------------------------------
+drop table if exists proceso.tmp_migracion_r6_origen_{IDUNICO} purge;
+drop table if exists proceso.tmp_migracion_r6_destino_{IDUNICO} purge;
+drop table if exists proceso.tmp_migracion_r6_base_{IDUNICO} purge;
+drop table if exists proceso.tmp_migracion_r6_par_{IDUNICO} purge;
