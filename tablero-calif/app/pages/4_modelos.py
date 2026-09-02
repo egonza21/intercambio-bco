@@ -54,15 +54,21 @@ pdm_mes = pdm_serie[pdm_serie["idx_mes"] == mes] if not pdm_serie.empty else pdm
 cortes_mes = cortes[cortes["idx_mes"] == mes] if not cortes.empty else cortes
 
 # --- KPIs ------------------------------------------------------------------
-psi = charts.psi_series(pdm, serie)
-psi_ult = psi[psi["idx_mes"] == psi["idx_mes"].max()] if not psi.empty else psi
-peor = psi_ult.loc[psi_ult["psi"].idxmax()] if not psi_ult.empty else None
+# El titular es el PSI de NIVEL 1 -- grupos, toda la población, todos los
+# productos --, que es el que dispara acción. Antes salía del PSI sobre bins de
+# PD, que es el nivel 3: un diagnóstico, no un indicador de cabecera.
+_psi_n1 = charts.psi_grupos(dist_grupo, "todos", None, "grupo_base", False)
+_ult = _psi_n1.iloc[-1] if not _psi_n1.empty else None
 solap = charts.tabla_solapamientos(cortes_mes)
 
 k1, k2, k3, k4 = st.columns([1.2, 1, 1, 1])
-k1.metric("Peor PSI del último mes",
-          f"{peor['psi']:.3f}".replace(".", ",") if peor is not None else "--",
-          help=f"Modelo {peor['modelo']}" if peor is not None else None)
+k1.metric("PSI general del último mes",
+          f"{_ult['psi']:.3f}".replace(".", ",") if _ult is not None else "--",
+          help=("Nivel 1: distribución de grupos de toda la población, todos "
+                "los productos, contra "
+                + (theme.etiqueta_mes_idx(int(_ult["idx_base"]))
+                   if _ult is not None else "--")
+                + ". Es el que decide; los niveles 2 y 3 explican."))
 k2.metric("Modelos activos",
           theme.fmt_miles(pdm_mes["modelo"].nunique()) if not pdm_mes.empty else "--")
 k3.metric("Cortes solapados", theme.fmt_miles(len(solap)) if solap is not None else "0",

@@ -347,8 +347,89 @@ def construir(desde: int, hasta: int, mes: int, rezago: int) -> str:
         nombre = "puntaje 0–999" if escala == "puntaje_0_999" else "probabilidad 0–1"
         doc.sub(f"Histograma de PD — {nombre}")
         doc.figura(charts.histograma_pd(pdm[pdm["idx_mes"] == mes], escala))
-    doc.sub("PSI en el tiempo — serie general")
-    doc.figura(charts.psi_tiempo(pdm, "general"))
+    doc.cierra()
+
+    # --- 5. PSI, los tres niveles -----------------------------------------
+    # El HTML tiene que mostrar EXACTAMENTE lo mismo que la app. Antes esta
+    # sección llamaba a la versión vieja del PSI -- epsilon sin descarte, un
+    # solo nivel -- así que el archivo que circulaba por mail traía valores
+    # inflados mientras la pantalla mostraba los corregidos.
+    #
+    # Sin interactividad se fija la variante por defecto: base contra el primer
+    # mes de la ventana (deriva acumulada) y grupo_base.
+    base_movil = False
+    serie_n1 = charts.psi_grupos(dist, "todos", None, "grupo_base", base_movil)
+    mes_base = (theme.etiqueta_mes_idx(int(serie_n1["idx_base"].iloc[-1]))
+                if not serie_n1.empty else "--")
+
+    doc.seccion("psi", "PSI",
+                "Mide cuánto se movió la población entre grupos de riesgo "
+                "frente a un mes de referencia. Si el reparto entre G1 y G8 es "
+                "igual, da cero; mientras más población cambie de grupo, más "
+                "sube. Debajo de 0,10 el cambio es despreciable; entre 0,10 y "
+                "0,25 hay que revisarlo; por encima de 0,25 la población ya no "
+                "se parece a la de referencia.")
+    doc.partes.append(
+        f'<div class="banda" style="background:#eef4fb;'
+        f'border:1px solid {theme.SERIES[0]};color:{theme.INK}">'
+        f'<b>Regla de lectura.</b> El nivel 1 es el que dispara acción. Los '
+        f'niveles 2 y 3 explican por qué, no deciden. Si el nivel 1 y el 3 se '
+        f'contradicen, manda el 1: los grupos son la unidad con la que se '
+        f'oferta.<br><b>Base de comparación:</b> {mes_base} '
+        f'(primer mes de la ventana, deriva acumulada).</div>')
+
+    doc.sub("Nivel 1 · General")
+    doc.partes.append(
+        '<p class="sub">¿Se está moviendo el riesgo del banco? PSI sobre la '
+        'distribución de grupos de toda la población, sin partir por modelo.</p>')
+    fig1, _, _ = charts.psi_grupos_grafico(dist, "todos", None, "grupo_base",
+                                           base_movil)
+    doc.figura(fig1)
+
+    doc.sub("De dónde sale el número")
+    doc.partes.append(
+        '<p class="sub">Aporte de cada grupo al índice del mes de corte.</p>')
+    doc.tabla(charts.aporte_psi_grupo(dist, mes, "todos", None, "grupo_base",
+                                      base_movil), maximo=14)
+
+    # Nivel 2: sin selector, se elige el modelo de mayor población.
+    if not dist.empty and dist["modelo"].notna().any():
+        mod = (dist[dist["modelo"].notna()].groupby("modelo")["clientes"].sum()
+               .sort_values(ascending=False).index[0])
+        doc.sub(f"Nivel 2 · Por modelo — {mod}")
+        doc.partes.append(
+            f'<p class="sub">¿Qué población le está entrando a este modelo? Se '
+            f'muestra <b>{mod}</b>, el de mayor población; en la app el modelo '
+            f'se elige.</p>')
+        doc.partes.append(
+            f'<div class="banda" style="background:#fdf5e3;'
+            f'border:1px solid {theme.ESTADO_ALERTA};color:#7a5800">'
+            f'<b>Esto mide reasignación de población, no deriva del modelo.</b> '
+            f'Si otro modelo se lleva parte de sus clientes, este PSI sube sin '
+            f'que el modelo haya cambiado nada. Contrastar con «Vigencia de '
+            f'modelos» y con el flujo entre modelos de la sección de '
+            f'Migración.</div>')
+        fig2, _, _ = charts.psi_grupos_grafico(dist, "todos", mod, "grupo_base",
+                                               base_movil)
+        doc.figura(fig2)
+
+    doc.sub("Nivel 3 · Diagnóstico: PSI sobre la PD")
+    doc.partes.append(
+        '<p class="sub">¿Se movió la PD sin cruzar cortes? Sirve cuando el '
+        'nivel 1 está tranquilo pero se sospecha deriva.</p>')
+    fig3, n_m, n_t, descartados = charts.psi_pd_grafico(pdm, "general", base_movil)
+    doc.figura(fig3)
+    partes = []
+    if n_t:
+        partes.append(f"Mostrando los <b>{n_m} de {n_t}</b> modelos con mayor PSI.")
+    if descartados:
+        partes.append(
+            f"Se descartaron <b>{descartados}</b> comparaciones de bin con menos "
+            f"del 0,1% de población en alguno de los dos meses, y el resto se "
+            f"renormalizó: sin eso, unos pocos clientes moviéndose entre bins "
+            f"de cola irrelevantes producían PSI sostenidos de 1,5.")
+    if partes:
+        doc.nota(" ".join(partes))
     doc.cierra()
 
     generado = datetime.now().strftime("%d/%m/%Y %H:%M")
