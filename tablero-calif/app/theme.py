@@ -45,45 +45,51 @@ GRUPOS_BASE_ORDENADOS = ["G1", "G2", "G3", "G4", "G5", "G6", "G7", "G8"]
 _ORDEN_MIN, _ORDEN_MAX = 10, 83
 
 # ---------------------------------------------------------------------------
-# Rampa ordinal de riesgo -- MULTI-TONO: verde (G1) a rojo (G8)
+# Rampa ordinal de riesgo -- PuBuGn recortada
 # ---------------------------------------------------------------------------
-# G1-G8 es una escala ORDINAL, así que tiene que leerse como gradiente. La
-# primera versión fue monocromática (un solo tono azul, claro a oscuro), que es
-# lo que la guía de visualización pide para una secuencial. En la práctica no
-# funcionó: en las LÍNEAS de la página de evolución, ocho azules a dL=0.06 son
-# indistinguibles entre sí.
+# G1-G8 es una escala ORDINAL, así que tiene que leerse como gradiente.
 #
-# Esta rampa recorre verde -> ámbar -> rojo, con croma moderado (0.10-0.12:
-# tonos sobrios, no primarios). El tono da la diferencia entre series; la
-# LUMINOSIDAD, que baja de forma monótona de 0.753 a 0.299, da el orden.
+# La escala es PuBuGn (morado - azul - verde), con dos ajustes que NO son
+# opcionales y conviene entender antes de tocarlos:
 #
-# Que el gradiente lo lleven las dos cosas a la vez no es decorativo: es lo que
-# hace que la escala sobreviva cuando el tono se pierde. En escala de grises o
-# impreso queda el span de L de 0.454, y bajo daltonismo la separación adyacente
-# (dE 6.4 a 8.4 protan/deutan) queda MEJOR que en la versión monocromática,
-# justamente porque no depende solo del tono.
+# 1. RECORTE DEL EXTREMO CLARO. PuBuGn arranca casi blanco (#fff7fb, contraste
+#    1,03:1). En un heatmap eso está bien -- "casi cero" tiene que recederse
+#    hacia el fondo -- pero en LÍNEAS sobre fondo claro los primeros grupos
+#    desaparecen. El recorte útil arranca a 0.32 del recorrido de luminosidad,
+#    que es donde el extremo claro alcanza 2,04:1. Recortar menos no alcanza:
+#    a 0.15 el contraste queda en 1,27:1 y a 0.25 en 1,47:1, los dos bajo el
+#    piso de 2:1.
+#
+#    CONSECUENCIA A LA VISTA: el morado de PuBuGn vive entero en el tramo
+#    clarísimo (L 0.87 a 0.98), así que el recorte se lo lleva. La rampa de
+#    LÍNEAS va de azul a verde. El morado sobrevive en ESCALA_SECUENCIAL, que
+#    usa la escala completa porque ahí el extremo claro sí puede recederse.
+#
+# 2. EXTENSIÓN DEL EXTREMO OSCURO. PuBuGn termina en L=0.351 y ocho niveles con
+#    separación mínima de dL=0.06 necesitan bajar hasta ~0.30. Se agrega un
+#    paso siguiendo la dirección de croma del último.
+#
+# El muestreo es POR LUMINOSIDAD OBJETIVO, no por posición en la escala:
+# PuBuGn no está equiespaciada en L, así que muestrear por posición daría
+# pasos desiguales y algunos por debajo del piso.
 #
 # Validada con los checks ordinales en superficie clara:
-#   Lightness monotone  PASS   (0.753 -> 0.299, siempre descendente)
+#   Lightness monotone  PASS   (0.766 -> 0.300, siempre descendente)
 #   Adjacent dL         PASS   (todos los gaps >= 0.06)
-#   Light-end contrast  PASS   (#7ac28e, 2.06:1, sobre el piso de 2:1)
-#   Single hue          FAIL   (spread 135°) <- ES EL OVERRIDE DELIBERADO.
-#
-# El FAIL de "single hue" está asumido y documentado: es el precio de que las
-# ocho series se distingan. No es un descuido, y no hay que "arreglarlo"
-# volviendo a un solo tono sin resolver antes el problema de las líneas.
+#   Light-end contrast  PASS   (#95b7d8, 2.04:1)
+#   Single hue          FAIL   (spread 77°) <- override deliberado: una rampa
+#                              de un solo tono no distingue ocho líneas.
 _RAMPA_G = [
-    "#7ac28e",  # G1  L 0.753
-    "#80a961",  # G2  L 0.687
-    "#878d36",  # G3  L 0.620
-    "#8a7101",  # G4  L 0.556
-    "#875400",  # G5  L 0.492
-    "#7e3800",  # G6  L 0.428
-    "#6f1b02",  # G7  L 0.360
-    "#5b0016",  # G8  L 0.299
-    "#43000f",  # ancla virtual: solo para interpolar las aperturas de G8
+    "#95b7d8",  # G1  L 0.766
+    "#64a7ce",  # G2
+    "#3e93c2",  # G3
+    "#158596",  # G4
+    "#007369",  # G5
+    "#015f4d",  # G6
+    "#014b3a",  # G7
+    "#01372a",  # G8  L 0.300
+    "#012a20",  # ancla virtual: solo para interpolar las aperturas de G8
 ]
-
 
 def _hex_a_lin(h: str) -> list[float]:
     h = h.lstrip("#")
@@ -127,14 +133,6 @@ def _mezcla(h0: str, h1: str, f: float) -> str:
     return _oklab_a_hex(l0 + f * (l1 - l0), a0 + f * (a1 - a0), b0 + f * (b1 - b0))
 
 
-def _rampa(t: float) -> str:
-    """t en [0,1]: 0 = menor riesgo (verde claro), 1 = mayor (rojo oscuro).
-    Solo recorre las ocho anclas reales, no el ancla virtual."""
-    t = min(1.0, max(0.0, t)) * 7
-    i = min(6, int(t))
-    return _mezcla(_RAMPA_G[i], _RAMPA_G[i + 1], t - i)
-
-
 def color_grupo(grupo: str) -> str:
     """Color de un grupo por su posición ordinal.
 
@@ -143,11 +141,11 @@ def color_grupo(grupo: str) -> str:
     G7_M y G7_A quedan a un cuarto, la mitad y tres cuartos del camino entre
     G7 y G8, así que leen como subdivisiones de G7 y no como grupos nuevos.
     """
-    orden = GRUPO_ORDEN.get(grupo)
+    orden = GRUPO_ORDEN.get((grupo or "").strip())
     if orden is None:
         return INK_MUTED
     base, apertura = divmod(orden, 10)      # G7_M (72) -> base 7, apertura 2
-    i = base - 1                            # índice del ancla del grupo base
+    i = base - 1
     if apertura == 0:
         return _RAMPA_G[i]
     return _mezcla(_RAMPA_G[i], _RAMPA_G[i + 1], apertura / 4)
@@ -156,22 +154,47 @@ def color_grupo(grupo: str) -> str:
 COLOR_GRUPO = {g: color_grupo(g) for g in GRUPOS_ORDENADOS}
 COLOR_GRUPO_BASE = {g: color_grupo(g) for g in GRUPOS_BASE_ORDENADOS}
 
-# Escala continua para heatmaps de MAGNITUD (segmento x grupo, cobertura).
-# Sigue siendo de un solo tono: ahí el color codifica "cuánto", no un grupo, y
-# para magnitud la guía sí pide una secuencial monocromática. La rampa de
-# riesgo multi-tono se usa solo donde el color identifica un GRUPO.
+# PuBuGn COMPLETA, con el extremo claro incluido: acá el color codifica
+# magnitud, no identidad de grupo, y "casi cero" sí debe recederse hacia el
+# fondo. Es la única parte del tablero donde se ve el morado de la escala.
 ESCALA_SECUENCIAL = [
-    [0.0, "#e8f0fb"], [0.2, "#b7d3f6"], [0.4, "#6da7ec"],
-    [0.6, "#2a78d6"], [0.8, "#1c5cab"], [1.0, "#0d366b"],
+    [0.000, "#fff7fb"], [0.125, "#ece2f0"], [0.250, "#d0d1e6"],
+    [0.375, "#a6bddb"], [0.500, "#67a9cf"], [0.625, "#3690c0"],
+    [0.750, "#02818a"], [0.875, "#016c59"], [1.000, "#014636"],
 ]
+
+# ---------------------------------------------------------------------------
+# Etiquetas de segmento
+# ---------------------------------------------------------------------------
+# Los segmentos llegan como códigos. Este diccionario los traduce a algo
+# legible en los ejes.
+#
+# PENDIENTE DE CONFIRMAR: los nombres son un placeholder. Mientras un código no
+# esté acá, `etiqueta_segmento` lo devuelve tal cual, así que agregar entradas
+# es seguro y no rompe nada.
+SEGMENTOS: dict[str, str] = {
+    # "2": "Personal",
+    # "3": "Preferente",
+    # "4": "Pyme",
+}
+
+
+def etiqueta_segmento(codigo) -> str:
+    """Nombre legible del segmento, o el código si no está mapeado.
+
+    Devuelve SIEMPRE un string: si el segmento es un código numérico y llega
+    como número, Plotly trata el eje como escala continua y el heatmap sale
+    como una banda sin celdas."""
+    if codigo is None:
+        return "sin segmento"
+    return SEGMENTOS.get(str(codigo).strip(), str(codigo).strip())
+
 
 # ---------------------------------------------------------------------------
 # Orden canónico de productos -- el del mapeo idx de CLAUDE.md
 # ---------------------------------------------------------------------------
-# Se impone explícitamente en los visuales que comparan paneles (el comparador
-# de dos meses) para que el orden NO dependa de los datos de cada mes: si un
-# producto se ordena por volumen, cambia de posición entre paneles y la
-# comparación visual deja de servir.
+# Se impone explícitamente en los visuales que comparan paneles, para que el
+# orden NO dependa de los datos de cada mes.
 PRODUCTOS_ORDENADOS = [
     "consumo", "tdc", "libranza", "rotativo",
     "hip_vis", "hip_novis", "lea_hab_vis", "lea_hab_novis",

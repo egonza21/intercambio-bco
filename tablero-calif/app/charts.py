@@ -36,9 +36,21 @@ def _sin_datos(msg: str = VACIO) -> go.Figure:
 # ===========================================================================
 
 def _grupos_ordenados(valores) -> list[str]:
-    """Los grupos presentes, ordenados por grupo_orden. Nunca por el orden en
-    que llegaron los datos ni alfabéticamente: G7_A iría antes que G7_B."""
-    return sorted(set(valores), key=lambda g: theme.GRUPO_ORDEN.get(g, 999))
+    """Los grupos presentes, en el orden canónico de theme.GRUPOS_ORDENADOS.
+
+    Se recorre la lista canónica y se filtra a lo presente, en vez de ordenar
+    los valores que llegaron: así el resultado NO depende de los datos. Un
+    valor desconocido (un grupo nuevo, o uno con espacios que se escapó del
+    strip) va al final, visible, en vez de mezclarse en el medio.
+
+    Esto hay que usarlo en los DOS lados: el categoryorder del eje Y el orden
+    en que se agregan las trazas. En barras apiladas y áreas, el orden de
+    apilado y el de la leyenda los define el orden de las TRAZAS, no el eje;
+    poner solo categoryorder deja las G desordenadas igual.
+    """
+    presentes = {str(v).strip() for v in valores if v is not None}
+    canon = [g for g in theme.GRUPOS_ORDENADOS if g in presentes]
+    return canon + sorted(presentes - set(canon))
 
 
 def composicion_grupo(df: pd.DataFrame, familia: str | None = None,
@@ -116,6 +128,11 @@ def heatmap_segmento_grupo(df: pd.DataFrame, producto: str | None = None,
     if d.empty:
         return _sin_datos()
 
+    d = d.copy()
+    # A string ANTES de agrupar: si el segmento es un código numérico, Plotly
+    # trata el eje como escala continua y las filas salen como una banda sin
+    # celdas, con ticks 2,3,4,5 en vez de categorías.
+    d["segmento"] = d["segmento"].map(theme.etiqueta_segmento)
     g = d.groupby(["segmento", "grupo"], as_index=False)["clientes"].sum()
     g["share"] = g["clientes"] / g.groupby("segmento")["clientes"].transform("sum")
     cols = _grupos_ordenados(g["grupo"])
@@ -123,8 +140,9 @@ def heatmap_segmento_grupo(df: pd.DataFrame, producto: str | None = None,
     cnt = g.pivot(index="segmento", columns="grupo", values="clientes").reindex(columns=cols)
     # Segmentos por tamaño: el más grande arriba, para que la lectura no
     # dependa del alfabeto.
-    orden_seg = (g.groupby("segmento")["clientes"].sum().sort_values(ascending=False)
-                 .index.tolist())
+    orden_seg = [str(v) for v in
+                 g.groupby("segmento")["clientes"].sum()
+                  .sort_values(ascending=False).index]
     piv, cnt = piv.reindex(orden_seg), cnt.reindex(orden_seg)
 
     if normalizar:
@@ -135,21 +153,38 @@ def heatmap_segmento_grupo(df: pd.DataFrame, producto: str | None = None,
         linea_z = "%{z:,.0f} clientes<br>%{customdata:.1%} del segmento"
 
     fig = go.Figure(go.Heatmap(
-        z=z, x=cols, y=piv.index.tolist(),
+        z=z, x=cols, y=[str(v) for v in piv.index],
         colorscale=theme.ESCALA_SECUENCIAL, zmin=0,
-        xgap=2, ygap=2, customdata=extra,
+        xgap=3, ygap=3, customdata=extra,
         colorbar=dict(title=dict(text=titulo, font=dict(size=11)),
                       tickformat=fmt, thickness=12, len=0.75, outlinewidth=0),
         hovertemplate=("Segmento <b>%{y}</b> · grupo <b>%{x}</b><br>"
                        + linea_z + "<extra></extra>"),
     ))
-    fig.update_layout(height=max(320, 40 * len(piv.index) + 150))
-    # categoryorder explícito en los dos ejes: ni el grupo ni el segmento se
-    # ordenan por el orden en que llegan los datos.
+    # El número dentro de la celda: con pocos segmentos entra y se lee sin
+    # pasar el mouse.
+    for i, seg in enumerate(piv.index):
+        for j, gr in enumerate(cols):
+            v = piv.values[i][j]
+            if v is None or (isinstance(v, float) and v != v):
+                continue
+            fig.add_annotation(
+                x=gr, y=str(seg), showarrow=False,
+                text=(f"{v:.0%}" if normalizar else theme.fmt_miles(cnt.values[i][j])),
+                font=dict(size=10, family=theme.FONT,
+                          color="#ffffff" if v > (0.55 if normalizar else 0) and
+                          (normalizar or cnt.values[i][j] > 0.55 * float(cnt.values.max()))
+                          else theme.INK))
+
+    fig.update_layout(height=max(320, 46 * len(piv.index) + 150))
+    # type="category" explícito: sin eso Plotly infiere numérico cuando los
+    # segmentos son códigos. categoryorder="array" en los dos ejes, para que
+    # ni el grupo ni el segmento dependan del orden en que llegan los datos.
     fig.update_xaxes(title_text="Grupo de riesgo", showline=False, ticks="",
-                     categoryorder="array", categoryarray=cols)
+                     type="category", categoryorder="array", categoryarray=cols)
     fig.update_yaxes(title_text="", showgrid=False, showline=False, ticks="",
-                     categoryorder="array", categoryarray=list(reversed(orden_seg)))
+                     type="category", categoryorder="array",
+                     categoryarray=[str(v) for v in reversed(orden_seg)])
     return _t(fig)
 
 
@@ -385,6 +420,69 @@ def matriz_migracion(df: pd.DataFrame, producto: str, solo_mismo_segmento: bool 
     return _t(fig)
 
 
+def flujo_modelos(df: pd.DataFrame, producto: str | None = None) -> go.Figure:
+    """Clientes que cambiaron de modelo entre los dos meses comparados.
+
+    Es lo que separa reasignación de deriva. Si el PSI de un modelo sube y acá
+    se ve un flujo grande hacia él, la población que le entró es nueva: el
+    modelo no cambió, cambió a quién califica. La diagonal son los que se
+    quedaron en el mismo modelo.
+    """
+    if df.empty or "modelo_anterior" not in df.columns:
+        return _sin_datos("la tabla de migración no trae modelo_anterior; "
+                          "hay que reconstruirla")
+    d = df[df["categoria"] == "movimiento"].copy()
+    if producto and producto != "todos":
+        d = d[d["producto"] == producto]
+    d = d[d["modelo_anterior"].notna() & d["modelo_actual"].notna()]
+    if d.empty:
+        return _sin_datos()
+
+    m = (d.groupby(["modelo_anterior", "modelo_actual"], as_index=False)["clientes"]
+         .sum())
+    ejes = sorted(set(m["modelo_anterior"]) | set(m["modelo_actual"]))
+    piv = (m.pivot(index="modelo_anterior", columns="modelo_actual",
+                   values="clientes").reindex(index=ejes, columns=ejes))
+    cnt = piv.fillna(0).values
+    fila = cnt.sum(axis=1, keepdims=True)
+    share = np.divide(cnt, fila, out=np.zeros_like(cnt, dtype=float), where=fila > 0)
+    # Fuera de la diagonal es lo que interesa: la diagonal se apaga para que no
+    # domine la escala, porque casi todos se quedan en su modelo.
+    z = np.where(np.eye(len(ejes), dtype=bool), np.nan, share)
+
+    fig = go.Figure(go.Heatmap(
+        z=z, x=ejes, y=ejes, colorscale=theme.ESCALA_SECUENCIAL, zmin=0,
+        xgap=3, ygap=3, customdata=cnt,
+        colorbar=dict(title=dict(text="% del modelo<br>de origen",
+                                 font=dict(size=10, color=theme.INK_MUTED)),
+                      tickformat=".0%", thickness=12, len=0.7, outlinewidth=0),
+        hovertemplate=("<b>%{y} &#8594; %{x}</b><br>%{customdata:,.0f} clientes"
+                       "<br>%{z:.1%} de los que estaban en %{y}<extra></extra>"),
+    ))
+    for i, yv in enumerate(ejes):
+        for j, xv in enumerate(ejes):
+            if cnt[i, j] <= 0:
+                continue
+            diag = i == j
+            fig.add_annotation(
+                x=xv, y=yv, showarrow=False,
+                text=theme.fmt_miles(cnt[i, j]),
+                font=dict(size=9, family=theme.FONT,
+                          color=theme.INK_MUTED if diag else
+                          ("#ffffff" if share[i, j] > 0.55 else theme.INK)))
+    fig.update_layout(height=max(380, 44 * len(ejes) + 190))
+    fig.update_xaxes(title_text="Modelo en el mes actual", side="top",
+                     showline=False, ticks="", type="category")
+    fig.update_yaxes(title_text="Modelo en el mes anterior", autorange="reversed",
+                     showgrid=False, showline=False, ticks="", type="category")
+    fig.add_annotation(
+        x=0, y=-0.14, xref="paper", yref="paper", xanchor="left", showarrow=False,
+        text="La diagonal (los que no cambiaron de modelo) va sin color para "
+             "que no domine la escala; el conteo sigue anotado.",
+        font=dict(size=11, color=theme.INK_MUTED, family=theme.FONT))
+    return _t(fig)
+
+
 def estabilidad_deterioro(df: pd.DataFrame, producto: str) -> go.Figure:
     """Estabilidad (traza de la matriz) y deterioro neto en el tiempo."""
     if df.empty:
@@ -515,6 +613,204 @@ def histograma_pd(df: pd.DataFrame, escala: str) -> go.Figure:
     return _t(fig)
 
 
+# ---------------------------------------------------------------------------
+# PSI -- tres niveles
+# ---------------------------------------------------------------------------
+# El PSI que había era uno solo, sobre bins de PD y partido por modelo. Medía
+# algo distinto de lo que parecía: si un modelo se lleva la población de otro,
+# el PSI de los dos se dispara sin que ninguno haya cambiado. Eso es
+# REASIGNACIÓN de población entre modelos, no deriva de un modelo.
+#
+# La estructura de tres niveles separa las preguntas:
+#
+#   1. General     PSI de grupos G1-G8 sobre toda la población, por producto.
+#                  ¿Se está moviendo el riesgo del banco? Es el que decide.
+#   2. Por modelo  El mismo PSI de grupos, filtrado a un modelo.
+#                  ¿Qué población le está entrando a este modelo?
+#   3. PD          PSI sobre bins de PD. ¿Se movió la PD sin cruzar cortes?
+#
+# El nivel 1 es el que dispara acción; 2 y 3 explican, no deciden.
+
+MIN_PESO_BIN = 0.001   # 0,1% -- ver psi_pd()
+
+
+def _psi_par(base: pd.Series, act: pd.Series) -> float:
+    """PSI entre dos distribuciones ya normalizadas y alineadas."""
+    return float(((act - base) * np.log(act / base)).sum())
+
+
+def psi_grupos(df: pd.DataFrame, producto: str | None = None,
+               modelo: str | None = None, columna: str = "grupo_base",
+               base_movil: bool = False) -> pd.DataFrame:
+    """PSI sobre la distribución de GRUPOS, que es la unidad con la que se
+    oferta. Sale de distribucion_grupo.
+
+    `base_movil=False` compara contra el primer mes de la ventana (deriva
+    acumulada); `True`, contra el mes anterior (cambio mensual).
+    """
+    if df.empty or columna not in df.columns:
+        return pd.DataFrame()
+    d = df
+    if producto and producto != "todos":
+        d = d[d["producto"] == producto]
+    if modelo and modelo != "todos":
+        d = d[d["modelo"] == modelo]
+    d = d[d[columna].notna()]
+    if d.empty:
+        return pd.DataFrame()
+
+    g = d.groupby(["idx_mes", columna], as_index=False)["clientes"].sum()
+    g["p"] = g["clientes"] / g.groupby("idx_mes")["clientes"].transform("sum")
+    meses = sorted(g["idx_mes"].unique())
+    if len(meses) < 2:
+        return pd.DataFrame()
+
+    filas = []
+    for k, m in enumerate(meses[1:], start=1):
+        ref = meses[k - 1] if base_movil else meses[0]
+        b = g[g["idx_mes"] == ref].set_index(columna)["p"]
+        a = g[g["idx_mes"] == m].set_index(columna)["p"]
+        idx = b.index.union(a.index)
+        # Los grupos son pocos y estables: un epsilon acá no distorsiona como
+        # sí lo hace en los bins de PD.
+        b2 = b.reindex(idx).fillna(0).clip(lower=1e-6)
+        a2 = a.reindex(idx).fillna(0).clip(lower=1e-6)
+        filas.append({"idx_mes": m, "idx_base": ref, "psi": _psi_par(b2, a2)})
+    return pd.DataFrame(filas)
+
+
+def aporte_psi_grupo(df: pd.DataFrame, idx_mes: int, producto: str | None = None,
+                     modelo: str | None = None, columna: str = "grupo_base",
+                     base_movil: bool = False) -> pd.DataFrame:
+    """Cuánto aporta cada grupo al PSI de un mes.
+
+    Convierte "el PSI subió a 0,31" en "subió porque G5 pasó de 8% a 14%".
+    """
+    if df.empty or columna not in df.columns:
+        return pd.DataFrame()
+    d = df
+    if producto and producto != "todos":
+        d = d[d["producto"] == producto]
+    if modelo and modelo != "todos":
+        d = d[d["modelo"] == modelo]
+    d = d[d[columna].notna()]
+    if d.empty:
+        return pd.DataFrame()
+    g = d.groupby(["idx_mes", columna], as_index=False)["clientes"].sum()
+    g["p"] = g["clientes"] / g.groupby("idx_mes")["clientes"].transform("sum")
+    meses = sorted(g["idx_mes"].unique())
+    if idx_mes not in meses or len(meses) < 2:
+        return pd.DataFrame()
+    k = meses.index(idx_mes)
+    if k == 0:
+        return pd.DataFrame()
+    ref = meses[k - 1] if base_movil else meses[0]
+    b = g[g["idx_mes"] == ref].set_index(columna)["p"]
+    a = g[g["idx_mes"] == idx_mes].set_index(columna)["p"]
+    idx = _grupos_ordenados(b.index.union(a.index))
+    b2 = b.reindex(idx).fillna(0).clip(lower=1e-6)
+    a2 = a.reindex(idx).fillna(0).clip(lower=1e-6)
+    ap = (a2 - b2) * np.log(a2 / b2)
+    return pd.DataFrame({
+        "grupo": idx,
+        "% en la base": [b.reindex(idx).fillna(0).loc[x] for x in idx],
+        "% en el mes": [a.reindex(idx).fillna(0).loc[x] for x in idx],
+        "aporte al PSI": [ap.loc[x] for x in idx],
+    }).sort_values("aporte al PSI", ascending=False).reset_index(drop=True)
+
+
+def psi_pd(df: pd.DataFrame, serie: str, base_movil: bool = False
+           ) -> tuple[pd.DataFrame, int]:
+    """PSI sobre bins de PD. Devuelve (serie, bins_descartados).
+
+    Descarta los bins con menos de MIN_PESO_BIN de población en CUALQUIERA de
+    los dos meses y renormaliza sobre los que quedan.
+
+    La versión anterior metía un epsilon de 1e-6 en los bins vacíos, y eso
+    inflaba el resultado: ln(p/1e-6) es enorme, y con 20 bins por década hay
+    muchos bins de cola con poblaciones diminutas. Un puñado de clientes
+    moviéndose entre dos bins irrelevantes producía un PSI de 1,5 sostenido,
+    que es el valor irreal que se veía.
+    """
+    if df.empty:
+        return pd.DataFrame(), 0
+    d = df[df["serie_pd"] == serie] if serie else df
+    if d.empty:
+        return pd.DataFrame(), 0
+    g = d.groupby(["modelo", "idx_mes", "bin"], as_index=False)["clientes"].sum()
+    g["p"] = g["clientes"] / g.groupby(["modelo", "idx_mes"])["clientes"].transform("sum")
+
+    filas, descartados = [], 0
+    for mod, sub in g.groupby("modelo"):
+        meses = sorted(sub["idx_mes"].unique())
+        if len(meses) < 2:
+            continue
+        for k, m in enumerate(meses[1:], start=1):
+            ref = meses[k - 1] if base_movil else meses[0]
+            b = sub[sub["idx_mes"] == ref].set_index("bin")["p"]
+            a = sub[sub["idx_mes"] == m].set_index("bin")["p"]
+            idx = b.index.union(a.index)
+            b = b.reindex(idx).fillna(0)
+            a = a.reindex(idx).fillna(0)
+            vivos = (b >= MIN_PESO_BIN) & (a >= MIN_PESO_BIN)
+            descartados += int((~vivos).sum())
+            if vivos.sum() < 2:
+                continue
+            b2, a2 = b[vivos], a[vivos]
+            b2, a2 = b2 / b2.sum(), a2 / a2.sum()   # renormalizar
+            filas.append({"modelo": mod, "idx_mes": m, "idx_base": ref,
+                          "psi": _psi_par(b2, a2), "bins": int(vivos.sum())})
+    return pd.DataFrame(filas), descartados
+
+
+def _grafico_psi(s: pd.DataFrame, columna_serie: str, titulo_y: str,
+                 max_series: int = 4) -> tuple[go.Figure, int, int]:
+    """Líneas de PSI con los umbrales. Devuelve (fig, mostradas, totales)."""
+    if s.empty:
+        return _sin_datos("hacen falta al menos dos meses para calcular PSI"), 0, 0
+    meses = sorted(s["idx_mes"].unique())
+    etiquetas = [theme.etiqueta_mes_idx(m) for m in meses]
+    orden = s.groupby(columna_serie)["psi"].max().sort_values(ascending=False)
+    todas = len(orden)
+    elegidas = orden.index.tolist()[:max_series]
+
+    fig = go.Figure()
+    for i, nombre in enumerate(elegidas):
+        sub = s[s[columna_serie] == nombre].set_index("idx_mes").reindex(meses)
+        fig.add_scatter(
+            x=etiquetas, y=sub["psi"].values, name=str(nombre),
+            mode="lines+markers",
+            line=dict(color=theme.SERIES[i % 4], width=2,
+                      dash=theme.SERIES_DASH[i % 4]),
+            marker=dict(size=8, line=dict(color=theme.SURFACE, width=2)),
+            hovertemplate=f"{nombre} · PSI %{{y:.3f}}<extra></extra>")
+    for val, txt, col in ((0.10, "0,10  revisar", theme.ESTADO_ALERTA),
+                          (0.25, "0,25  severo", theme.ESTADO_CRITICO)):
+        fig.add_hline(y=val, line=dict(color=col, width=1, dash="dot"), opacity=0.55)
+        fig.add_annotation(x=1, y=val, xref="paper", yref="y", xanchor="left",
+                           xshift=6, showarrow=False, text=txt,
+                           font=dict(size=10, color=col, family=theme.FONT))
+    fig.update_layout(height=400, margin=dict(r=140))
+    fig.update_xaxes(title_text="", categoryorder="array", categoryarray=etiquetas)
+    fig.update_yaxes(title_text=titulo_y, rangemode="tozero")
+    return _t(fig, unified=True), len(elegidas), todas
+
+
+def psi_grupos_grafico(df, producto=None, modelo=None, columna="grupo_base",
+                       base_movil=False):
+    s = psi_grupos(df, producto, modelo, columna, base_movil)
+    if s.empty:
+        return _sin_datos("hacen falta al menos dos meses"), 0, 0
+    s = s.assign(_serie=producto or "todos")
+    return _grafico_psi(s, "_serie", "PSI sobre la distribución de grupos", 1)
+
+
+def psi_pd_grafico(df, serie, base_movil=False, max_series=4):
+    s, desc = psi_pd(df, serie, base_movil)
+    fig, n, tot = _grafico_psi(s, "modelo", "PSI sobre bins de PD", max_series)
+    return fig, n, tot, desc
+
+
 def psi_series(df: pd.DataFrame, serie: str) -> pd.DataFrame:
     """PSI por modelo contra el primer mes de la ventana.
 
@@ -609,21 +905,28 @@ def sensibilidad_cortes(df: pd.DataFrame, modelo: str | None = None) -> go.Figur
     ypos = {p: i for i, p in enumerate(productos)}
 
     fig = go.Figure()
-    vistos: set[str] = set()
-    for _, r in d.iterrows():
-        y = ypos[r["producto"]]
-        color = theme.COLOR_GRUPO.get(r["grupo"], theme.INK_MUTED)
-        fig.add_scatter(
-            x=[r["pd_min"], r["pd_max"]], y=[y, y], mode="lines",
-            line=dict(color=color, width=11), opacity=0.95,
-            name=r["grupo"], legendgroup=r["grupo"],
-            showlegend=r["grupo"] not in vistos,
-            hovertemplate=(f"<b>{r['producto']}</b> · {r['grupo']}"
-                           f"<br>PD de {theme.fmt_pd(r['pd_min'])} "
-                           f"a {theme.fmt_pd(r['pd_max'])}"
-                           f"<br>{theme.fmt_miles(r['clientes'])} clientes<extra></extra>"),
-        )
-        vistos.add(r["grupo"])
+    # Se recorre por GRUPO en orden canónico, no por fila. Iterando el
+    # DataFrame, la leyenda salía en el orden en que aparecía cada grupo por
+    # primera vez -- que depende del producto que estuviera arriba -- y las G
+    # quedaban desordenadas.
+    for grupo in _grupos_ordenados(d["grupo"]):
+        sub = d[d["grupo"] == grupo]
+        primera = True
+        for _, r in sub.iterrows():
+            y = ypos[r["producto"]]
+            fig.add_scatter(
+                x=[r["pd_min"], r["pd_max"]], y=[y, y], mode="lines",
+                line=dict(color=theme.COLOR_GRUPO.get(grupo, theme.INK_MUTED),
+                          width=11),
+                opacity=0.95, name=grupo, legendgroup=grupo,
+                showlegend=primera,
+                hovertemplate=(f"<b>{r['producto']}</b> · {grupo}"
+                               f"<br>PD de {theme.fmt_pd(r['pd_min'])} "
+                               f"a {theme.fmt_pd(r['pd_max'])}"
+                               f"<br>{theme.fmt_miles(r['clientes'])} clientes"
+                               f"<extra></extra>"),
+            )
+            primera = False
 
     sol = d[d["solapa"].fillna(False).astype(bool)]
     if not sol.empty:
@@ -836,6 +1139,12 @@ def chequeo_dominio(grupos: pd.DataFrame, modelos: pd.DataFrame,
             f"Los grupos caen todos dentro de G1–G8 y las seis aperturas de "
             f"sufi. Los modelos son los {len(conocidos)} conocidos.")
 
+    # Los modelos desconocidos se listan SIEMPRE en el resumen, no solo en el
+    # detalle desplegable: son el dato accionable. Al 2026-09-01 ya se vieron
+    # T2_HIP, T3_HIP, T3_SOCIAL y T2_SOCIAL en las leyendas, que no están en la
+    # lista de ocho de CLAUDE.md. Pendiente de confirmar cuáles son los reales.
+    nombres_raros = sorted(m_raros["modelo"].tolist()) if not m_raros.empty else []
+
     partes, detalle = [], []
     if not g_raros.empty:
         partes.append(f"{g_raros['grupo'].nunique()} valores de grupo fuera de "
@@ -851,11 +1160,15 @@ def chequeo_dominio(grupos: pd.DataFrame, modelos: pd.DataFrame,
                 f"pd_por_modelo.sql o sus bins salen mal sin dar síntoma")
         detalle.append(m_raros.assign(hallazgo="modelo desconocido"))
 
+    resumen = "Aparecieron " + ", ".join(partes) + "."
+    if nombres_raros:
+        resumen += (" Los modelos fuera de la lista son: "
+                    + ", ".join(f"**{m}**" for m in nombres_raros) + ".")
+    resumen += (" Un modelo nuevo no es un error en sí: es una novedad que hay "
+                "que mirar antes de confiar en el histograma de PD, y que hay "
+                "que reflejar en la lista de CLAUDE.md.")
     return Chequeo(
-        "Dominio de grupos y modelos sin novedades", False,
-        "Aparecieron " + ", ".join(partes) + ". Un modelo nuevo no es un error "
-        "en sí: es una novedad que hay que mirar antes de confiar en el "
-        "histograma de PD.",
+        "Dominio de grupos y modelos sin novedades", False, resumen,
         pd.concat(detalle, ignore_index=True) if detalle else None)
 
 

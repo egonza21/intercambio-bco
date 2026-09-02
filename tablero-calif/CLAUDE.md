@@ -441,6 +441,14 @@ modelo puede aparecer en cualquiera de las columnas `modelo_*`.
 Además existe un **valor vacío o nulo** en `modelo_*`. No es un noveno modelo:
 es la ausencia de modelo. Ver "El modelo vacío" más abajo.
 
+> **PENDIENTE 2026-09-01: la lista de ocho puede estar incompleta.** En las
+> leyendas del tablero aparecieron `T2_HIP`, `T3_HIP`, `T3_SOCIAL` y
+> `T2_SOCIAL`, que no están acá. No se sabe todavía si son modelos reales, o
+> variantes de los ocho, o restos de una carga vieja. **Hasta confirmarlo, la
+> lista de escala de `pd_por_modelo.sql` no se toca**: ninguno de esos cuatro
+> parece de puntaje, pero si alguno lo fuera sus bins saldrían mal sin dar
+> síntoma. El chequeo 3 de la página de salud del dato ya los lista.
+
 Que los ocho apliquen a todos los productos es consistente con que solo haya
 dos PD (ver "La PD no es por producto"): el modelo es un atributo del cliente,
 igual que la PD, y las 16 columnas `modelo_*` son la misma información

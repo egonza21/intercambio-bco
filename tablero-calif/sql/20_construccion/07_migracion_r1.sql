@@ -26,6 +26,19 @@
 -- Separar cambio de población de decisión del modelo exige cruzar contra la
 -- base de clientes del mes: de ahí el CTE base_mes, que lee la tabla ancha.
 --
+-- MODELO ANTERIOR Y ACTUAL, por el mismo motivo que los dos segmentos: es lo
+-- que permite distinguir reasignación de deriva sin construir una cohorte
+-- fija. Si el PSI de un modelo sube y al mismo tiempo se ve un flujo grande de
+-- clientes que cambiaron de modelo entre esos dos meses, el movimiento es de
+-- asignación y no del modelo.
+--
+-- OJO CON EL TAMAÑO: son dos columnas más en el grano, y multiplican las filas
+-- por las combinaciones modelo_anterior x modelo_actual que existan. Con ocho
+-- modelos el techo teórico es 64x, aunque en la práctica la mayoría de los
+-- clientes se queda en el mismo modelo y la matriz es casi diagonal. MEDIR el
+-- conteo de filas después de la primera construcción antes de dar la ETL por
+-- buena: la página de Construcción lo muestra.
+--
 -- DOS SEGMENTOS, no uno coalescido: un cliente que cambia de segmento no
 -- cambió de riesgo, pero con una sola columna aparece como salida y entrada.
 -- En `entrada` el segmento_anterior queda NULL; en `salida`, el actual.
@@ -40,13 +53,14 @@ stored as parquet
 as
 with destino as (
   select
-    l.num_doc, l.tipo_doc, l.segmento, l.producto, l.idx_mes, l.grupo_base
+    l.num_doc, l.tipo_doc, l.segmento, l.producto, l.idx_mes,
+    l.grupo_base, l.modelo
   from proceso.largo_calificaciones_{IDUNICO} l
 ),
 
 origen as (
   select
-    l.num_doc, l.tipo_doc, l.segmento, l.producto,
+    l.num_doc, l.tipo_doc, l.segmento, l.producto, l.modelo,
     l.idx_mes + 1 as idx_mes_destino,
     l.grupo_base
   from proceso.largo_calificaciones_{IDUNICO} l
@@ -70,6 +84,8 @@ par as (
     coalesce(d.idx_mes,  o.idx_mes_destino)  as idx_mes_destino,
     o.grupo_base                             as grupo_base_origen,
     d.grupo_base                             as grupo_base_destino,
+    o.modelo                                 as modelo_anterior,
+    d.modelo                                 as modelo_actual,
     case
       when d.num_doc is null then o.idx_mes_destino
       when o.num_doc is null then d.idx_mes - 1
@@ -91,6 +107,8 @@ clasificado as (
     cast(floor((p.idx_mes_destino - 1) / 12) as smallint) as ingestion_year,
     p.grupo_base_origen,
     p.grupo_base_destino,
+    p.modelo_anterior,
+    p.modelo_actual,
     case
       when p.grupo_base_origen is not null
        and p.grupo_base_destino is not null       then 'movimiento'
@@ -116,6 +134,8 @@ select
   c.producto,
   c.grupo_base_origen,
   c.grupo_base_destino,
+  c.modelo_anterior,
+  c.modelo_actual,
   c.categoria,
   count(*) as clientes
 from clasificado c
@@ -127,6 +147,8 @@ group by
   c.producto,
   c.grupo_base_origen,
   c.grupo_base_destino,
+  c.modelo_anterior,
+  c.modelo_actual,
   c.categoria;
 
 compute stats proceso.migracion_r1_{IDUNICO};

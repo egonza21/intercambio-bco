@@ -69,22 +69,49 @@ with st.sidebar:
         index=productos.index("consumo") if "consumo" in productos else 0,
         key="p3_prod") if productos else "todos"
 
-# --- KPIs ------------------------------------------------------------------
+# --- contexto: contra qué mes se compara, sacado del dato -------------------
+mes_origen = mes_mig - rezago
+st.markdown(
+    f'<p class="sub" style="font-size:1rem;color:{theme.INK}">'
+    f'<b>{theme.etiqueta_mes_idx(mes_mig)}</b> contra '
+    f'<b>{theme.etiqueta_mes_idx(mes_origen)}</b>'
+    f'<span style="color:{theme.INK_MUTED};font-weight:400"> · producto '
+    f'{producto}{" · a segmento constante" if mismo_seg else ""}</span></p>',
+    unsafe_allow_html=True)
+
+# --- KPIs: volumen absoluto además del porcentaje --------------------------
 serie = charts.serie_estabilidad(mig, producto)
 fila = serie[serie["idx_mes"] == mes_mig]
-k1, k2, k3, k4 = st.columns(4)
-k1.metric("Estabilidad",
-          theme.fmt_pct(fila["estabilidad"].iloc[0]) if not fila.empty else "--",
-          help="Masa en la diagonal: clientes que se quedaron en su grupo.")
-k2.metric("Deterioro neto",
-          theme.fmt_pct(fila["deterioro_neto"].iloc[0]) if not fila.empty else "--",
-          help="Masa bajo la diagonal menos masa sobre ella.")
-if not mig_mes.empty:
-    d = mig_mes[mig_mes["producto"] == producto] if producto != "todos" else mig_mes
-    k3.metric("Entradas", theme.fmt_miles(
-        d[d["categoria"].isin(["entrada", "ganancia_elegibilidad"])]["clientes"].sum()))
-    k4.metric("Salidas", theme.fmt_miles(
-        d[d["categoria"].isin(["salida", "perdida_elegibilidad"])]["clientes"].sum()))
+d = mig_mes[mig_mes["producto"] == producto] if producto != "todos" else mig_mes
+if mismo_seg and not d.empty and "segmento_anterior" in d.columns:
+    d = d[d["segmento_anterior"] == d["segmento_actual"]]
+
+
+def _cat(*cats) -> int:
+    if d.empty:
+        return 0
+    return int(d[d["categoria"].isin(cats)]["clientes"].sum())
+
+
+comparados = _cat("movimiento")
+k = st.columns(6)
+k[0].metric("Clientes comparados", theme.fmt_miles(comparados),
+            help="Con grupo en los DOS meses. Es el denominador de la matriz: "
+                 "los porcentajes de estabilidad y deterioro salen de acá.")
+k[1].metric("Estabilidad",
+            theme.fmt_pct(fila["estabilidad"].iloc[0]) if not fila.empty else "--",
+            help="Traza de la matriz: los que se quedaron en su grupo.")
+k[2].metric("Deterioro neto",
+            theme.fmt_pct(fila["deterioro_neto"].iloc[0]) if not fila.empty else "--",
+            delta_color="inverse",
+            help="Masa bajo la diagonal menos masa sobre ella.")
+k[3].metric("Entraron", theme.fmt_miles(_cat("entrada")),
+            help="No estaban en la tabla en el mes de origen. Cambio de población.")
+k[4].metric("Salieron", theme.fmt_miles(_cat("salida")),
+            help="No están en la tabla en el mes destino. Cambio de población.")
+k[5].metric("Perdieron elegibilidad", theme.fmt_miles(_cat("perdida_elegibilidad")),
+            help="Siguen en la tabla pero sin grupo en este producto. Es una "
+                 "decisión del modelo, no una baja.")
 
 st.markdown(f"## Matriz de migración · {theme.etiqueta_mes_idx(mes_mig)}")
 st.markdown(
@@ -121,15 +148,36 @@ else:
     st.download_button("Descargar peores saltos en CSV", data=data.csv(saltos),
                        file_name="peores_saltos.csv", mime="text/csv", key="p3_dl")
 
+# --- flujo entre modelos ---------------------------------------------------
+st.markdown("---")
+st.markdown("## Flujo de clientes entre modelos")
+st.markdown(
+    f'<p class="sub">Quién calificaba a cada cliente en '
+    f'{theme.etiqueta_mes_idx(mes_origen)} y quién lo califica en '
+    f'{theme.etiqueta_mes_idx(mes_mig)}. Es lo que separa <b>reasignación</b> '
+    f'de <b>deriva</b>: si el PSI de un modelo sube y acá se ve un flujo '
+    f'grande hacia él, la población que le entró es nueva — el modelo no '
+    f'cambió, cambió a quién califica.</p>',
+    unsafe_allow_html=True)
+st.plotly_chart(charts.flujo_modelos(mig_mes, producto),
+                use_container_width=True, key="p3_flujo")
+
 # --- migración de PD -------------------------------------------------------
 st.markdown("---")
 st.markdown("## Migración de deciles de PD")
 st.markdown(
-    '<p class="sub"><b>No se lee como la de arriba.</b> Los deciles se '
-    'recalculan cada mes, así que esto mide reordenamiento del ranking, no '
-    'desplazamiento de la distribución. Una diagonal fuerte acá dice que el '
-    'orden se mantuvo, no que la PD no se movió: eso lo dice el PSI, en la '
-    'página de Modelos.</p>',
+    '<p class="sub">Cada <b>fila</b> es el decil de PD del cliente en el mes '
+    'anterior; cada <b>columna</b>, el decil del mes actual. La diagonal son '
+    'los que se quedaron en su decil. Por debajo de la diagonal, los que '
+    'empeoraron; por encima, los que mejoraron.</p>'
+    '<p class="sub">Una matriz sana tiene la masa concentrada en la diagonal y '
+    'en las celdas contiguas. Masa lejos de la diagonal significa que un grupo '
+    'grande de clientes cambió mucho de PD en un mes, y eso normalmente es un '
+    '<b>cambio de modelo o un problema de datos</b>, no comportamiento real.</p>'
+    '<p class="sub">A diferencia de la migración por producto, esta no depende '
+    'de cortes: mide el movimiento de la PD misma. <b>Si la PD se mueve poco '
+    'pero la migración por producto muestra mucho movimiento, el problema está '
+    'en los cortes, no en los clientes.</b></p>',
     unsafe_allow_html=True)
 
 mig_pd = _ventana(data.migracion_pd(rezago))

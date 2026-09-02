@@ -27,6 +27,8 @@ select
   t.producto,
   t.grupo_base_origen,
   t.grupo_base_destino,
+  t.modelo_anterior,
+  t.modelo_actual,
   t.categoria,
   t.clientes
 from proceso.migracion_r1_{IDUNICO} t;

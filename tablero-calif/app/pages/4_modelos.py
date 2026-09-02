@@ -35,6 +35,9 @@ def _ventana(df):
 
 pdm = _ventana(data.pd_por_modelo())
 cortes = _ventana(data.cortes_por_producto())
+# El PSI de niveles 1 y 2 va sobre GRUPOS, así que sale de distribucion_grupo,
+# no de pd_por_modelo. Ver charts.psi_grupos().
+dist_grupo = _ventana(data.distribucion_grupo())
 
 with st.sidebar:
     st.markdown("## Filtros de la página")
@@ -116,28 +119,154 @@ c1, c2 = st.columns(2)
 with c1:
     st.markdown("## Histograma de PD")
     st.markdown(
-        '<p class="sub">Una traza por modelo, eje logarítmico. Las dos escalas '
-        'van en gráficos separados: un puntaje de 0 a 999 y una probabilidad '
-        'no comparten unidad.</p>', unsafe_allow_html=True)
+        '<p class="sub">Cada traza es la distribución de PD de un modelo: qué '
+        'porcentaje de su población cae en cada tramo. El eje es logarítmico '
+        'porque las PD se concentran en el extremo bajo.</p>'
+        '<p class="sub"><b>Qué mirar:</b> que cada modelo tenga una campana '
+        'definida y no picos aislados. Un pico angosto significa muchos '
+        'clientes con la misma PD exacta, que suele ser un valor por defecto y '
+        'no una predicción.</p>'
+        '<p class="sub">Las dos escalas van en gráficos separados: un puntaje '
+        'de 0 a 999 y una probabilidad no comparten unidad.</p>',
+        unsafe_allow_html=True)
     if escala:
         st.plotly_chart(charts.histograma_pd(pdm_mes, escala),
                         use_container_width=True, key="p4_hist")
     else:
         st.info("Sin datos de PD para esta ventana.")
 with c2:
-    st.markdown("## PSI en el tiempo")
+    st.markdown("## Vigencia de modelos")
     st.markdown(
-        '<p class="sub">Contra el primer mes de la ventana, sobre bins de '
-        'ancho fijo. Los umbrales van como líneas tenues, no como series.</p>',
+        '<p class="sub">Va al lado del PSI a propósito: un escalón acá explica '
+        'un salto de PSI sin que ningún modelo haya cambiado.</p>',
         unsafe_allow_html=True)
-    st.plotly_chart(charts.psi_tiempo(pdm, serie),
-                    use_container_width=True, key="p4_psi")
+    st.plotly_chart(charts.vigencia_modelos(dist_grupo),
+                    use_container_width=True, key="p4_vig")
 
+# ===========================================================================
+# PSI EN TRES NIVELES
+# ===========================================================================
+st.markdown("---")
+st.markdown("# PSI")
 st.markdown(
-    '<p class="nota">Los bins de probabilidad son logarítmicos, 20 por década. '
-    'Con bins lineales de 0,05 toda la población caía en el primer bin y el PSI '
-    'daba cero siempre, que se lee como estabilidad y en realidad es ceguera '
-    'del instrumento.</p>', unsafe_allow_html=True)
+    '<p class="sub">Mide cuánto se movió la población entre grupos de riesgo '
+    'frente a un mes de referencia. Si el reparto entre G1 y G8 es igual, da '
+    'cero; mientras más población cambie de grupo, más sube.</p>'
+    '<p class="sub">Debajo de <b>0,10</b> el cambio es despreciable; entre '
+    '<b>0,10 y 0,25</b> hay que revisarlo; por encima de <b>0,25</b> la '
+    'población ya no se parece a la de referencia.</p>',
+    unsafe_allow_html=True)
+
+with st.sidebar:
+    st.markdown("## PSI")
+    base_movil = st.radio(
+        "Base de comparación", [False, True], key="p4_base",
+        format_func=lambda b: ("Mes anterior (cambio mensual)" if b
+                               else "Primer mes de la ventana (deriva acumulada)"))
+    prod_psi = st.selectbox(
+        "Producto (PSI de grupos)",
+        ["todos"] + sorted(dist_grupo["producto"].unique().tolist())
+        if not dist_grupo.empty else ["todos"], key="p4_prod_psi")
+    abrir_sufi = st.toggle(
+        "Usar la apertura de sufi", value=False, key="p4_sufi",
+        help="Por defecto el PSI va sobre grupo_base (8 categorías). Activado, "
+             "usa el grupo crudo con G7_B/M/A y G8_B/M/A.")
+
+col_grupo = "grupo" if abrir_sufi else "grupo_base"
+_serie_n1 = charts.psi_grupos(dist_grupo, prod_psi, None, col_grupo, base_movil)
+_base_lbl = (theme.etiqueta_mes_idx(int(_serie_n1["idx_base"].iloc[-1]))
+             if not _serie_n1.empty else "--")
+
+st.info(
+    f"**Regla de lectura.** El nivel 1 es el que dispara acción. Los niveles 2 "
+    f"y 3 explican por qué, no deciden. Si el nivel 1 y el 3 se contradicen, "
+    f"manda el 1: los grupos son la unidad con la que se oferta.\n\n"
+    f"Base de comparación activa: **{_base_lbl}**"
+    f"{' (móvil, cambia con cada mes)' if base_movil else ''}.")
+
+# --- Nivel 1 ---------------------------------------------------------------
+st.markdown("## Nivel 1 · General")
+st.markdown(
+    f'<p class="sub"><b>¿Se está moviendo el riesgo del banco?</b> PSI sobre '
+    f'la distribución de grupos de toda la población, producto '
+    f'<b>{prod_psi}</b>, sin partir por modelo. Es el que decide.</p>',
+    unsafe_allow_html=True)
+fig1, _, _ = charts.psi_grupos_grafico(dist_grupo, prod_psi, None, col_grupo,
+                                       base_movil)
+st.plotly_chart(fig1, use_container_width=True, key="p4_psi1")
+
+# --- aporte por grupo ------------------------------------------------------
+st.markdown("### De dónde sale el número")
+st.markdown(
+    '<p class="sub">Qué grupo aporta más al índice. Convierte «el PSI subió a '
+    '0,31» en «subió porque G5 pasó de 8% a 14%».</p>',
+    unsafe_allow_html=True)
+ap = charts.aporte_psi_grupo(dist_grupo, mes, prod_psi, None, col_grupo, base_movil)
+if ap.empty:
+    st.info("Hacen falta al menos dos meses en la ventana.")
+else:
+    st.dataframe(
+        ap, use_container_width=True, hide_index=True,
+        column_config={
+            "% en la base": st.column_config.NumberColumn(format="%.1f%%"),
+            "% en el mes": st.column_config.NumberColumn(format="%.1f%%"),
+            "aporte al PSI": st.column_config.NumberColumn(format="%.4f"),
+        })
+    st.download_button("Descargar el aporte por grupo en CSV", data=data.csv(ap),
+                       file_name=f"aporte_psi_{mes}.csv", mime="text/csv",
+                       key="p4_dl_ap")
+
+# --- Nivel 2 ---------------------------------------------------------------
+st.markdown("## Nivel 2 · Por modelo")
+st.markdown(
+    '<p class="sub"><b>¿Qué población le está entrando a este modelo?</b> El '
+    'mismo PSI de grupos, filtrado a un modelo.</p>',
+    unsafe_allow_html=True)
+st.warning(
+    "**Esto mide reasignación de población, no deriva del modelo.** Si otro "
+    "modelo se lleva parte de sus clientes, este PSI sube sin que el modelo "
+    "haya cambiado nada. Contrastalo siempre con *Vigencia de modelos* de "
+    "arriba y con el *flujo entre modelos* de la página de Migración.",
+    icon="⚠")
+modelos_psi = (sorted(dist_grupo["modelo"].dropna().unique().tolist())
+               if not dist_grupo.empty else [])
+if modelos_psi:
+    mod_psi = st.selectbox("Modelo", modelos_psi, key="p4_mod_psi")
+    fig2, _, _ = charts.psi_grupos_grafico(dist_grupo, prod_psi, mod_psi,
+                                           col_grupo, base_movil)
+    st.plotly_chart(fig2, use_container_width=True, key="p4_psi2")
+else:
+    st.info("Sin modelos en la ventana.")
+
+# --- Nivel 3 ---------------------------------------------------------------
+with st.expander("Nivel 3 · Diagnóstico: PSI sobre la PD", expanded=False):
+    st.markdown(
+        '<p class="sub"><b>¿Se movió la PD sin cruzar cortes?</b> Sirve cuando '
+        'el nivel 1 está tranquilo pero se sospecha deriva: la PD puede '
+        'moverse dentro de un grupo sin cambiar el reparto entre grupos.</p>',
+        unsafe_allow_html=True)
+    fig3, n_mostradas, n_totales, descartados = charts.psi_pd_grafico(
+        pdm_serie, serie, base_movil)
+    st.plotly_chart(fig3, use_container_width=True, key="p4_psi3")
+    partes = []
+    if n_totales:
+        partes.append(f"Mostrando los <b>{n_mostradas} de {n_totales}</b> "
+                      f"modelos con mayor PSI.")
+    if descartados:
+        partes.append(
+            f"Se descartaron <b>{descartados}</b> comparaciones de bin con menos "
+            f"del 0,1% de población en alguno de los dos meses, y el resto se "
+            f"renormalizó. Sin eso, un puñado de clientes moviéndose entre bins "
+            f"de cola irrelevantes producía PSI de 1,5 sostenidos.")
+    if partes:
+        st.markdown(f'<p class="nota">{" ".join(partes)}</p>',
+                    unsafe_allow_html=True)
+    st.markdown(
+        '<p class="nota">Los bins de probabilidad son logarítmicos, 20 por '
+        'década, con bordes fijos. Con bins lineales de 0,05 toda la población '
+        'caía en el primero y el PSI daba cero siempre, que se lee como '
+        'estabilidad y en realidad es ceguera del instrumento.</p>',
+        unsafe_allow_html=True)
 
 st.markdown("---")
 st.download_button("Descargar cortes del mes en CSV", data=data.csv(cortes_mes),

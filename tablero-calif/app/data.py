@@ -324,8 +324,16 @@ def _con_grupo(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty or "grupo" not in df.columns:
         return df
     df = df.copy()
+    # strip ANTES de mapear: 'G1 ' con espacio no está en GRUPO_ORDEN, cae al
+    # final del orden y no da ningún error. Es exactamente el tipo de fallo
+    # silencioso que este repo trata de no tener.
+    df["grupo"] = df["grupo"].astype("string").str.strip()
     df["grupo_orden"] = df["grupo"].map(theme.GRUPO_ORDEN)
     df["grupo_base"] = df["grupo"].map(theme.GRUPO_BASE)
+    sin_mapear = df.loc[df["grupo_orden"].isna(), "grupo"].dropna().unique()
+    if len(sin_mapear):
+        # No se rompe, pero tiene que verse: son grupos fuera del dominio.
+        df.attrs["grupos_sin_mapear"] = sorted(sin_mapear.tolist())
     return df
 
 
