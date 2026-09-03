@@ -248,6 +248,37 @@ def construir(desde: int, hasta: int, mes: int, rezago: int) -> str:
         return df if df.empty or "idx_mes" not in df.columns \
             else df[df["idx_mes"].between(desde, hasta)]
 
+    # --- 0. Qué se movió --------------------------------------------------
+    # Va antes que todo: quien abre el reporte tiene que saber dónde mirar
+    # antes de mirar. Sin ventana: el baseline necesita toda la historia.
+    cob_full = data.cobertura_producto()
+    doc.seccion("anomalias", "Qué se movió este mes",
+                f"Celdas segmento × producto ordenadas por cuánto se salieron "
+                f"de su propia historia, en {theme.etiqueta_mes_idx(mes)} "
+                f"contra {theme.etiqueta_mes_idx(mes - 1)}. Es un ranking, no "
+                f"una alarma: siempre muestra sus primeras filas. El baseline "
+                f"usa mediana y MAD, no promedio y desvío, porque los "
+                f"incidentes pasados están dentro de la historia y con "
+                f"promedio inflarían su propia variabilidad.")
+    for metrica, titulo in (("cantidad", "Por clientes calificados"),
+                            ("cobertura", "Por cobertura (% de la base)")):
+        rk, sb = charts.ranking_anomalias(cob_full, mes, metrica, 15)
+        doc.sub(titulo)
+        if rk.empty:
+            doc.nota("Ninguna celda con historia suficiente superó el piso de "
+                     "variación este mes.")
+        else:
+            vis = rk.drop(columns=["serie", "_cod_seg"]).copy()
+            vis["var_rel"] = vis["var_rel"].map(lambda v: f"{v * 100:+.1f}%")
+            vis["puntaje"] = vis["puntaje"].map(lambda v: f"{v:.1f}")
+            doc.tabla(vis, maximo=15)
+        if not sb.empty:
+            doc.nota(f"{len(sb)} celdas quedaron fuera del ranking por tener "
+                     f"menos de {charts.MESES_MINIMOS} meses de historia.")
+    doc.sub("La matriz completa · variación contra el mes anterior")
+    doc.figura(charts.matriz_segmento_producto(cob_full, mes, "variacion"))
+    doc.cierra()
+
     dist = _v(data.distribucion_grupo())
     base = _v(data.base_clientes())
     cob = _v(data.cobertura_producto())
@@ -276,6 +307,8 @@ def construir(desde: int, hasta: int, mes: int, rezago: int) -> str:
     doc.figura(charts.heatmap_segmento_grupo(dist_mes, "todos"))
     doc.sub("Cobertura por producto")
     doc.figura(charts.cobertura(cob_mes, "todos"))
+    doc.sub("Segmento × producto · clientes calificados")
+    doc.figura(charts.matriz_segmento_producto(cob, mes, "cantidad"))
     doc.cierra()
 
     # --- 2. Evolución ------------------------------------------------------
@@ -285,8 +318,16 @@ def construir(desde: int, hasta: int, mes: int, rezago: int) -> str:
     doc.figura(charts.mezcla_riesgo(dist, "consumo"))
     doc.sub("Base de clientes")
     doc.figura(charts.base_clientes_tiempo(base))
-    doc.sub("Vigencia de modelos")
+    doc.sub("Modelos vivos por mes")
+    doc.figura(charts.modelos_vivos(dist))
+    doc.sub("Reparto de la población entre modelos")
     doc.figura(charts.vigencia_modelos(dist))
+    puente = _v(data.puente_base())
+    if not puente.empty:
+        doc.sub("Puente de la base")
+        doc.figura(charts.puente_base(puente, mes, "todos"))
+        doc.sub("Entradas y salidas por segmento")
+        doc.figura(charts.puente_por_segmento(puente, mes))
     doc.cierra()
 
     # --- 3. Migración ------------------------------------------------------

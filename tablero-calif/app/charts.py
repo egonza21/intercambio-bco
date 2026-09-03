@@ -54,11 +54,18 @@ def _grupos_ordenados(valores) -> list[str]:
 
 
 def composicion_grupo(df: pd.DataFrame, familia: str | None = None,
-                      orden_productos: list[str] | None = None) -> go.Figure:
+                      orden_productos: list[str] | None = None,
+                      porcentaje: bool = True) -> go.Figure:
     """Composición de grupo por producto, barra apilada 100%.
 
     Apilada por grupo_orden ascendente: la barra lee de menor a mayor riesgo de
     izquierda a derecha, y el gradiente de la rampa hace de leyenda.
+
+    `porcentaje=False` cambia a apilado ABSOLUTO. No es el mismo gráfico en
+    otra unidad: en el 100% el porcentaje ES el gráfico y todas las barras
+    miden igual; en absoluto las barras miden volumen y se pueden comparar
+    entre productos, pero se pierde la lectura del reparto interno. Son dos
+    preguntas distintas y la etiqueta de la página lo dice.
 
     `orden_productos` fija el eje explícitamente. Sirve para el comparador de
     dos meses: si cada panel ordena por sus propios datos, un producto cambia
@@ -94,20 +101,31 @@ def composicion_grupo(df: pd.DataFrame, familia: str | None = None,
         s = (piv[piv["grupo"] == grupo].set_index("producto")
              .reindex(orden_prod).fillna(0))
         fig.add_bar(
-            y=orden_prod, x=s["share"].values, name=grupo, orientation="h",
+            y=orden_prod,
+            x=(s["share"] if porcentaje else s["clientes"]).values,
+            name=grupo, orientation="h",
             marker=dict(color=theme.COLOR_GRUPO.get(grupo, theme.INK_MUTED),
                         line=dict(color=theme.SURFACE, width=2)),  # gap de 2px
-            customdata=np.stack([s["clientes"].fillna(0).values], axis=-1),
+            customdata=np.stack([s["clientes"].fillna(0).values,
+                                 s["share"].fillna(0).values], axis=-1),
             hovertemplate=("<b>%{y}</b> · " + grupo +
-                           "<br>%{x:.1%} de la cartera del producto"
-                           "<br>%{customdata[0]:,.0f} clientes<extra></extra>"),
+                           ("<br>%{x:.1%} de la cartera del producto"
+                            "<br>%{customdata[0]:,.0f} clientes"
+                            if porcentaje else
+                            "<br>%{x:,.0f} clientes"
+                            "<br>%{customdata[1]:.1%} del producto")
+                           + "<extra></extra>"),
         )
     # traceorder normal: la leyenda sigue el orden de apilado (G1 primero), no
     # el invertido que Plotly usa por defecto en barras apiladas.
     fig.update_layout(barmode="stack", legend_traceorder="normal",
                       height=max(360, 34 * len(orden_prod) + 130))
-    fig.update_xaxes(title_text="Participación en la cartera del producto",
-                     tickformat=".0%", range=[0, 1])
+    if porcentaje:
+        fig.update_xaxes(title_text="Participación en la cartera del producto",
+                         tickformat=".0%", range=[0, 1])
+    else:
+        fig.update_xaxes(title_text="Clientes con calificación",
+                         tickformat=",.0f", rangemode="tozero")
     # categoryorder explícito: el eje NO se ordena por los datos.
     fig.update_yaxes(title_text="", categoryorder="array",
                      categoryarray=list(reversed(orden_prod)))
@@ -311,8 +329,20 @@ def base_clientes_tiempo(df: pd.DataFrame) -> go.Figure:
 
 
 def vigencia_modelos(df: pd.DataFrame) -> go.Figure:
-    """% de población por modelo en el tiempo. Un escalón acá explica saltos en
-    las otras páginas."""
+    """Reparto de la población entre modelos, área apilada. TODOS los modelos.
+
+    Antes recortaba a los cuatro de mayor población y agrupaba el resto en
+    "otros". Acá eso escondía justo lo que interesa: un modelo nuevo entra con
+    poca población y quedaba invisible dentro de "otros".
+
+    Como son ocho o nueve series y la paleta categórica tiene cuatro, el color
+    sale de la rampa secuencial repartida entre los modelos ordenados por
+    población. No identifica al modelo por sí solo -- para eso está la leyenda
+    y el hover -- pero mantiene el apilado legible y ordenado.
+
+    La pregunta "cuántos modelos hay vivos" la responde modelos_vivos(), que es
+    otro gráfico: en el área apilada un modelo con 1% no se ve.
+    """
     if df.empty:
         return _sin_datos()
     d = df.copy()
@@ -321,34 +351,25 @@ def vigencia_modelos(df: pd.DataFrame) -> go.Figure:
     g["share"] = g["clientes"] / g.groupby("idx_mes")["clientes"].transform("sum")
     meses = sorted(g["idx_mes"].unique())
     etiquetas = [theme.etiqueta_mes_idx(m) for m in meses]
-
-    top = g.groupby("modelo")["share"].mean().sort_values(ascending=False)
-    principales = top.index.tolist()[:4]
-    resto = [m for m in top.index if m not in principales]
+    modelos = (g.groupby("modelo")["share"].mean()
+               .sort_values(ascending=False).index.tolist())
 
     fig = go.Figure()
-    for i, mod in enumerate(principales):
-        # Un modelo que deja de usarse cae a 0% y eso tiene que VERSE: con
-        # hueco, la línea desaparece y parece que no hay dato.
+    n = max(1, len(modelos) - 1)
+    for i, mod in enumerate(modelos):
         s = (g[g["modelo"] == mod].set_index("idx_mes")
              .reindex(meses).fillna(0))
         fig.add_scatter(
-            x=etiquetas, y=s["share"].values, name=mod, mode="lines",
-            line=dict(color=theme.SERIES[i], width=2, dash=theme.SERIES_DASH[i]),
-            hovertemplate=mod + " · %{y:.1%} de la población<extra></extra>",
-        )
-    if resto:
-        s = (g[g["modelo"].isin(resto)].groupby("idx_mes")["share"].sum()
-             .reindex(meses).fillna(0))
-        fig.add_scatter(
-            x=etiquetas, y=s.values, name=f"otros ({len(resto)})", mode="lines",
-            line=dict(color=theme.INK_MUTED, width=1.5, dash="dot"),
-            hovertemplate="otros · %{y:.1%}<extra></extra>",
-        )
-    fig.update_layout(height=400)
-    fig.update_xaxes(title_text="")
+            x=etiquetas, y=s["share"].values, name=mod,
+            mode="lines", stackgroup="modelos", groupnorm="fraction",
+            line=dict(width=0.5, color=theme.SURFACE),
+            fillcolor=theme._rampa_secuencial(i / n),
+            hovertemplate=mod + " · %{y:.1%}<extra></extra>")
+    fig.update_layout(height=max(420, 22 * len(modelos) + 330),
+                      legend_traceorder="normal")
+    fig.update_xaxes(title_text="", categoryorder="array", categoryarray=etiquetas)
     fig.update_yaxes(title_text="Participación de la población calificada",
-                     tickformat=".0%", rangemode="tozero")
+                     tickformat=".0%", range=[0, 1])
     return _t(fig, unified=True)
 
 
@@ -359,8 +380,9 @@ def vigencia_modelos(df: pd.DataFrame) -> go.Figure:
 _FUERA = ["entrada", "ganancia_elegibilidad", "salida", "perdida_elegibilidad"]
 
 
-def matriz_migracion(df: pd.DataFrame, producto: str, solo_mismo_segmento: bool = True
-                     ) -> go.Figure:
+def matriz_migracion(df: pd.DataFrame, producto: str,
+                     solo_mismo_segmento: bool = True,
+                     segmento: str | None = None) -> go.Figure:
     """Matriz 8x8 sobre grupo_base, con entradas y salidas al margen.
 
     El color es DIVERGENTE y centrado en la diagonal: el tono dice la dirección
@@ -374,6 +396,8 @@ def matriz_migracion(df: pd.DataFrame, producto: str, solo_mismo_segmento: bool 
     if df.empty:
         return _sin_datos()
     d = df[df["producto"] == producto] if producto and producto != "todos" else df.copy()
+    if segmento and segmento != "todos" and "segmento_actual" in d.columns:
+        d = d[d["segmento_actual"].map(theme._cod) == theme._cod(segmento)]
     if solo_mismo_segmento and "segmento_anterior" in d.columns:
         d = d[d["segmento_anterior"] == d["segmento_actual"]]
     if d.empty:
@@ -418,8 +442,12 @@ def matriz_migracion(df: pd.DataFrame, producto: str, solo_mismo_segmento: bool 
     # Margen gris con lo que no es movimiento.
     fuera = (d[d["categoria"].isin(_FUERA)].groupby("categoria")["clientes"].sum()
              .reindex(_FUERA).fillna(0))
-    etiquetas = {"entrada": "entrada", "ganancia_elegibilidad": "ganancia elegib.",
-                 "salida": "salida", "perdida_elegibilidad": "pérdida elegib."}
+    etiquetas = {
+        "entrada": "entrada (población)",
+        "ganancia_elegibilidad": "ganó elegibilidad",
+        "salida": "salida (población)",
+        "perdida_elegibilidad": "PERDIÓ ELEGIBILIDAD (tenía G, quedó sin G)",
+    }
     partes = [f"{etiquetas[k]}  <b>{theme.fmt_miles(v)}</b>" for k, v in fuera.items() if v > 0]
     if partes:
         fig.add_annotation(
@@ -511,9 +539,12 @@ def estabilidad_deterioro(df: pd.DataFrame, producto: str) -> go.Figure:
     fig.add_scatter(x=etiquetas, y=s["estabilidad"], name="Estabilidad (diagonal)",
                     mode="lines", line=dict(color=theme.SERIES[0], width=2, dash="solid"),
                     hovertemplate="Estabilidad · %{y:.1%}<extra></extra>")
-    fig.add_scatter(x=etiquetas, y=s["deterioro_neto"], name="Deterioro neto",
+    fig.add_scatter(x=etiquetas, y=s["mejora"], name="Mejoraron",
+                    mode="lines", line=dict(color=theme.SERIES[2], width=2, dash="dot"),
+                    hovertemplate="Mejoraron · %{y:.1%}<extra></extra>")
+    fig.add_scatter(x=etiquetas, y=s["deterioro"], name="Empeoraron",
                     mode="lines", line=dict(color=theme.SERIES[1], width=2, dash="dash"),
-                    hovertemplate="Deterioro neto · %{y:.1%}<extra></extra>")
+                    hovertemplate="Empeoraron · %{y:.1%}<extra></extra>")
     fig.add_hline(y=0, line=dict(color=theme.AXIS, width=1))
     fig.update_layout(height=380)
     fig.update_xaxes(title_text="")
@@ -536,6 +567,8 @@ def serie_estabilidad(df: pd.DataFrame, producto: str) -> pd.DataFrame:
     g = d.groupby("idx_mes").apply(
         lambda x: pd.Series({
             "estabilidad": x.loc[x["_diag"], "clientes"].sum() / x["clientes"].sum(),
+            "mejora": x.loc[x["_mejor"], "clientes"].sum() / x["clientes"].sum(),
+            "deterioro": x.loc[x["_peor"], "clientes"].sum() / x["clientes"].sum(),
             "deterioro_neto": (x.loc[x["_peor"], "clientes"].sum()
                                - x.loc[x["_mejor"], "clientes"].sum()) / x["clientes"].sum(),
         }), include_groups=False).reset_index()
@@ -942,6 +975,382 @@ def tabla_peores_saltos(df: pd.DataFrame, minimo: int = 3) -> pd.DataFrame:
     g = (d.groupby(["mes", "producto", "grupo_base_origen", "grupo_base_destino", "saltos"],
                    as_index=False)["clientes"].sum())
     return g.sort_values("clientes", ascending=False).reset_index(drop=True)
+
+
+# ===========================================================================
+# MATRIZ SEGMENTO x PRODUCTO
+# ===========================================================================
+
+MODOS_MATRIZ = {
+    "cantidad": "Clientes calificados",
+    "cobertura": "% sobre la base del segmento",
+    "variacion": "Variación contra el mes anterior",
+}
+
+
+def matriz_segmento_producto(cob: pd.DataFrame, idx_mes: int,
+                             modo: str = "cantidad") -> go.Figure:
+    """Segmentos (por valor de negocio) x productos (orden canónico).
+
+    Los tres modos NO son redundantes, y la diferencia importa: si un mes
+    desaparecen filas enteras en vez de quedar con grupo nulo, la COBERTURA no
+    se mueve -- bajan numerador y denominador a la vez -- pero la CANTIDAD sí.
+    Mirar solo cobertura deja pasar ese caso.
+
+    `Independiente` va al final y separado del resto por una línea: es otra
+    sección del negocio y no se compara con la escala de valor.
+    """
+    if cob.empty:
+        return _sin_datos()
+    act = cob[cob["idx_mes"] == idx_mes]
+    if act.empty:
+        return _sin_datos()
+
+    segs = theme.segmentos_ordenados(act["segmento"])
+    prods = [p for p in theme.PRODUCTOS_ORDENADOS if p in set(act["producto"])]
+    if not segs or not prods:
+        return _sin_datos()
+
+    def _tabla(df):
+        g = df.groupby(["segmento", "producto"], as_index=False)[
+            ["cubiertos", "clientes"]].sum()
+        g["segmento"] = g["segmento"].map(theme._cod)
+        cnt = (g.pivot(index="segmento", columns="producto", values="cubiertos")
+               .reindex(index=segs, columns=prods))
+        base = (g.pivot(index="segmento", columns="producto", values="clientes")
+                .reindex(index=segs, columns=prods))
+        return cnt, base
+
+    cnt, base = _tabla(act)
+    cob_pct = cnt / base.where(base > 0)
+
+    prev = cob[cob["idx_mes"] == idx_mes - 1]
+    if modo == "variacion":
+        if prev.empty:
+            return _sin_datos("no hay mes anterior para comparar")
+        cnt0, _ = _tabla(prev)
+        z = ((cnt - cnt0) / cnt0.where(cnt0 > 0)).values
+        texto = np.where(np.isnan(z), "", np.vectorize(
+            lambda v: "" if v != v else f"{v * 100:+.0f}%")(z))
+        lim = float(np.nanmax(np.abs(z))) if np.isfinite(z).any() else 1.0
+        lim = max(0.05, min(lim, 1.0))
+        escala, zmin, zmax, zmid = theme.ESCALA_DIVERGENTE, -lim, lim, 0
+        barra = dict(title=dict(text="baja &#8592; &#8594; sube",
+                                font=dict(size=10, color=theme.INK_MUTED)),
+                     tickformat="+.0%", thickness=12, len=0.75, outlinewidth=0)
+        hover = ("<b>%{y}</b> · %{x}<br>%{z:+.1%} contra el mes anterior"
+                 "<br>%{customdata[0]:,.0f} ahora, %{customdata[1]:,.0f} antes"
+                 "<extra></extra>")
+        extra = np.stack([cnt.fillna(0).values, cnt0.reindex(
+            index=segs, columns=prods).fillna(0).values], axis=-1)
+    elif modo == "cobertura":
+        z = cob_pct.values
+        texto = np.where(np.isnan(z), "", np.vectorize(
+            lambda v: "" if v != v else f"{v * 100:.0f}")(z))
+        escala, zmin, zmax, zmid = theme.ESCALA_SECUENCIAL, 0, None, None
+        barra = dict(title=dict(text="% del<br>segmento", font=dict(size=10)),
+                     tickformat=".0%", thickness=12, len=0.75, outlinewidth=0)
+        hover = ("<b>%{y}</b> · %{x}<br>%{z:.1%} de la base del segmento"
+                 "<br>%{customdata[0]:,.0f} de %{customdata[1]:,.0f}<extra></extra>")
+        extra = np.stack([cnt.fillna(0).values, base.fillna(0).values], axis=-1)
+    else:
+        z = cnt.values.astype(float)
+        texto = np.where(np.isnan(z), "", np.vectorize(theme.fmt_compacto)(z))
+        escala, zmin, zmax, zmid = theme.ESCALA_SECUENCIAL, 0, None, None
+        barra = dict(title=dict(text="clientes", font=dict(size=10)),
+                     thickness=12, len=0.75, outlinewidth=0)
+        hover = ("<b>%{y}</b> · %{x}<br>%{z:,.0f} clientes calificados"
+                 "<br>%{customdata[0]:.1%} de la base del segmento<extra></extra>")
+        extra = np.stack([cob_pct.fillna(0).values], axis=-1)
+
+    etiquetas_y = theme.etiquetas_segmento(segs)
+    heat = dict(z=z, x=prods, y=etiquetas_y, colorscale=escala, xgap=3, ygap=3,
+                customdata=extra, colorbar=barra, hovertemplate=hover)
+    if zmin is not None:
+        heat["zmin"] = zmin
+    if zmax is not None:
+        heat["zmax"] = zmax
+    if zmid is not None:
+        heat["zmid"] = zmid
+    fig = go.Figure(go.Heatmap(**heat))
+
+    # El valor va anotado: 96 celdas entran en pantalla y se escanean rápido.
+    limite = np.nanmax(np.abs(z)) if np.isfinite(z).any() else 1
+    for i, seg in enumerate(etiquetas_y):
+        for j, pr in enumerate(prods):
+            if not texto[i][j]:
+                continue
+            fuerte = abs(z[i][j]) > 0.55 * limite
+            fig.add_annotation(
+                x=pr, y=seg, text=texto[i][j], showarrow=False,
+                font=dict(size=9, family=theme.FONT,
+                          color="#ffffff" if fuerte else theme.INK))
+
+    # Independiente, separado con una línea: no es un sexto nivel de la escala.
+    aparte = [theme.etiqueta_segmento(c) for c in segs if theme.fuera_de_escala(c)]
+    if aparte and len(aparte) < len(segs):
+        fig.add_hline(y=len(segs) - len(aparte) - 0.5,
+                      line=dict(color=theme.INK_MUTED, width=1, dash="dot"))
+        fig.add_annotation(
+            x=1, y=-0.16, xref="paper", yref="paper", xanchor="right",
+            showarrow=False,
+            text="Debajo de la línea, los segmentos que no forman parte de la "
+                 "escala de valor y no se comparan con ella.",
+            font=dict(size=11, color=theme.INK_MUTED, family=theme.FONT))
+
+    fig.update_layout(height=max(340, 44 * len(segs) + 200))
+    fig.update_xaxes(title_text="", side="top", showline=False, ticks="",
+                     type="category", categoryorder="array", categoryarray=prods,
+                     tickangle=-40)
+    fig.update_yaxes(title_text="", showgrid=False, showline=False, ticks="",
+                     type="category", categoryorder="array",
+                     categoryarray=list(reversed(etiquetas_y)))
+    return _t(fig)
+
+
+# ===========================================================================
+# RANKING DE ANOMALIAS
+# ===========================================================================
+# No es un semáforo. Con 96 celdas moviéndose cada mes por razones normales, un
+# panel de alertas binarias se vuelve ruido y deja de mirarse. Esto es un
+# RANKING de lo que más se movió, que siempre muestra sus primeras filas
+# aunque ninguna sea grave.
+
+PISO_VARIACION = 0.03    # 3%
+BASE_MINIMA = 500
+MESES_MINIMOS = 6
+_MAD_A_SIGMA = 1.4826    # escala la MAD para que sea comparable a un desvío
+
+
+def ranking_anomalias(cob: pd.DataFrame, idx_mes: int, metrica: str = "cantidad",
+                      tope: int = 15) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Celdas segmento x producto ordenadas por cuánto se salieron de SU propia
+    historia. Devuelve (ranking, sin_baseline).
+
+    El baseline usa MEDIANA y MAD, no promedio y desvío. La razón es concreta:
+    los incidentes pasados están DENTRO de la historia, y con promedio/desvío
+    un incidente infla su propia variabilidad, con lo cual el siguiente igual
+    parece normal. La mediana no se mueve por unos pocos valores extremos.
+
+    Tres guardas, todas necesarias:
+
+      PISO_VARIACION  una celda que nunca se mueve tiene MAD casi cero, y ahí
+                      un cambio de 0,3% da un puntaje enorme. Sin este piso el
+                      ranking se llena de ruido irrelevante.
+      BASE_MINIMA     una celda de 40 clientes salta de 40 a 60 sin que
+                      signifique nada.
+      MESES_MINIMOS   con menos historia el baseline no es baseline. Esas
+                      celdas NO reciben puntaje: van a la lista aparte con su
+                      variación cruda, para no fingir una precisión que no hay.
+
+    `metrica` es 'cantidad' (clientes calificados) o 'cobertura' (% sobre la
+    base). Son problemas distintos: desaparecer de la tabla no es lo mismo que
+    quedar sin grupo, y por eso el ranking se calcula sobre las dos.
+    """
+    if cob.empty:
+        return pd.DataFrame(), pd.DataFrame()
+    col = "cubiertos" if metrica == "cantidad" else "cobertura"
+    d = cob.copy()
+    d["segmento"] = d["segmento"].map(theme._cod)
+    g = d.groupby(["segmento", "producto", "idx_mes"], as_index=False).agg(
+        cubiertos=("cubiertos", "sum"), clientes=("clientes", "sum"))
+    g["cobertura"] = g["cubiertos"] / g["clientes"].where(g["clientes"] > 0)
+
+    filas, sin_base = [], []
+    for (seg, prod), sub in g.groupby(["segmento", "producto"]):
+        sub = sub.sort_values("idx_mes")
+        serie = sub.set_index("idx_mes")[col]
+        base_cli = sub.set_index("idx_mes")["cubiertos"]
+        if idx_mes not in serie.index or (idx_mes - 1) not in serie.index:
+            continue
+        ant, act = serie.loc[idx_mes - 1], serie.loc[idx_mes]
+        if base_cli.loc[idx_mes - 1] < BASE_MINIMA:
+            continue
+        if ant in (0, None) or ant != ant or ant == 0:
+            continue
+        var_rel = (act - ant) / abs(ant)
+
+        historia = serie.pct_change().dropna()
+        historia = historia[historia.index < idx_mes]
+        comun = dict(
+            segmento=theme.etiqueta_segmento(seg), _cod_seg=seg, producto=prod,
+            anterior=ant, actual=act, var_abs=act - ant, var_rel=var_rel,
+            meses_historia=len(historia),
+            serie=serie.reindex(sorted(serie.index)).tolist(),
+        )
+        if len(historia) < MESES_MINIMOS:
+            sin_base.append(comun)
+            continue
+        if abs(var_rel) < PISO_VARIACION:
+            continue
+        mediana = float(historia.median())
+        mad = float((historia - mediana).abs().median()) * _MAD_A_SIGMA
+        if mad <= 1e-9:
+            # MAD nula: la celda nunca se movió. Con el piso de variación ya
+            # superado, el salto es real; se le da un puntaje alto pero acotado
+            # en vez de dividir por cero.
+            puntaje = 99.0
+        else:
+            puntaje = abs(var_rel - mediana) / mad
+        filas.append({**comun, "puntaje": puntaje})
+
+    rk = pd.DataFrame(filas)
+    if not rk.empty:
+        # SOLO por magnitud del puntaje. Sin ponderar por valor de segmento: el
+        # orden de valor ya se ve en la columna, que lleva el nombre.
+        rk = rk.sort_values("puntaje", ascending=False).head(tope).reset_index(drop=True)
+    sb = pd.DataFrame(sin_base)
+    if not sb.empty:
+        sb = (sb.reindex(sb["var_rel"].abs().sort_values(ascending=False).index)
+              .reset_index(drop=True))
+    return rk, sb
+
+
+def mini_serie(valores: list, ancho: int = 150, alto: int = 34) -> go.Figure:
+    """Sparkline de la historia de una celda: distingue un salto de una
+    tendencia, que es la pregunta que sigue a ver el puntaje."""
+    fig = go.Figure(go.Scatter(
+        y=valores, mode="lines", line=dict(color=theme.SERIES[0], width=1.6),
+        hoverinfo="skip"))
+    if valores:
+        fig.add_scatter(x=[len(valores) - 1], y=[valores[-1]], mode="markers",
+                        marker=dict(size=5, color=theme.ESTADO_CRITICO),
+                        hoverinfo="skip")
+    fig.update_layout(
+        height=alto, width=ancho, margin=dict(l=0, r=0, t=2, b=2),
+        showlegend=False, paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)")
+    fig.update_xaxes(visible=False)
+    fig.update_yaxes(visible=False)
+    return fig
+
+
+# ===========================================================================
+# PUENTE DE LA BASE
+# ===========================================================================
+
+def puente_base(df: pd.DataFrame, idx_mes: int,
+                segmento: str | None = None) -> go.Figure:
+    """Cascada: base del mes anterior, entradas, salidas, base del mes.
+
+    Sabemos que la base cae, pero no por qué. Esto lo separa: si la caída viene
+    de que se van clientes se ve en la barra de salidas, y si viene de que
+    dejan de calificar, la base no se mueve pero sí la cobertura.
+    """
+    if df.empty:
+        return _sin_datos()
+    d = df.copy()
+    d["segmento"] = d["segmento"].map(theme._cod)
+    if segmento and segmento != "todos":
+        d = d[d["segmento"] == theme._cod(segmento)]
+    act = d[d["idx_mes"] == idx_mes]
+    if act.empty:
+        return _sin_datos("no hay datos del puente para este mes")
+
+    def _c(cat):
+        return float(act[act["categoria"] == cat]["clientes"].sum())
+
+    permanece, entrada, salida = _c("permanece"), _c("entrada"), _c("salida")
+    anterior = permanece + salida
+    actual = permanece + entrada
+
+    fig = go.Figure(go.Waterfall(
+        orientation="v",
+        measure=["absolute", "relative", "relative", "total"],
+        x=[theme.etiqueta_mes_idx(idx_mes - 1), "Entradas", "Salidas",
+           theme.etiqueta_mes_idx(idx_mes)],
+        y=[anterior, entrada, -salida, actual],
+        text=[theme.fmt_miles(anterior), f"+{theme.fmt_miles(entrada)}",
+              f"-{theme.fmt_miles(salida)}", theme.fmt_miles(actual)],
+        textposition="outside",
+        textfont=dict(size=11, color=theme.INK_SOFT, family=theme.FONT),
+        connector=dict(line=dict(color=theme.AXIS, width=1)),
+        increasing=dict(marker=dict(color=theme.DIV_MEJORA)),
+        decreasing=dict(marker=dict(color=theme.DIV_DETERIORO)),
+        totals=dict(marker=dict(color=theme.INK_MUTED)),
+        hovertemplate="%{x}<br>%{y:,.0f} clientes<extra></extra>",
+    ))
+    neto = actual - anterior
+    fig.add_annotation(
+        x=1, y=-0.18, xref="paper", yref="paper", xanchor="right",
+        showarrow=False,
+        text=(f"Neto {'+' if neto >= 0 else ''}{theme.fmt_miles(neto)} "
+              f"({(neto / anterior * 100) if anterior else 0:+.1f}%)"),
+        font=dict(size=11, family=theme.FONT,
+                  color=theme.ESTADO_OK if neto >= 0 else theme.ESTADO_CRITICO))
+    fig.update_layout(height=400, showlegend=False)
+    fig.update_xaxes(title_text="", type="category")
+    fig.update_yaxes(title_text="Clientes en la base", tickformat=",.0f",
+                     rangemode="tozero")
+    return _t(fig)
+
+
+def puente_por_segmento(df: pd.DataFrame, idx_mes: int) -> go.Figure:
+    """Entradas y salidas por segmento, en el orden de valor de negocio.
+
+    Es la vista que dice de dónde viene la caída: un neto negativo concentrado
+    en un segmento no es lo mismo que uno repartido.
+    """
+    if df.empty:
+        return _sin_datos()
+    d = df[df["idx_mes"] == idx_mes].copy()
+    if d.empty:
+        return _sin_datos("no hay datos del puente para este mes")
+    d["segmento"] = d["segmento"].map(theme._cod)
+    segs = theme.segmentos_ordenados(d["segmento"])
+    piv = (d.pivot_table(index="segmento", columns="categoria", values="clientes",
+                         aggfunc="sum").reindex(segs).fillna(0))
+    for c in ("entrada", "salida"):
+        if c not in piv.columns:
+            piv[c] = 0
+    etiquetas = theme.etiquetas_segmento(segs)
+
+    fig = go.Figure()
+    fig.add_bar(y=etiquetas, x=piv["entrada"].values, name="Entradas",
+                orientation="h",
+                marker=dict(color=theme.DIV_MEJORA,
+                            line=dict(color=theme.SURFACE, width=2)),
+                hovertemplate="%{y}<br>+%{x:,.0f} entradas<extra></extra>")
+    fig.add_bar(y=etiquetas, x=-piv["salida"].values, name="Salidas",
+                orientation="h",
+                marker=dict(color=theme.DIV_DETERIORO,
+                            line=dict(color=theme.SURFACE, width=2)),
+                customdata=piv["salida"].values,
+                hovertemplate="%{y}<br>-%{customdata:,.0f} salidas<extra></extra>")
+    fig.add_vline(x=0, line=dict(color=theme.AXIS, width=1))
+    fig.update_layout(barmode="relative", height=max(320, 46 * len(segs) + 150),
+                      legend_traceorder="normal")
+    fig.update_xaxes(title_text="Clientes (entradas a la derecha, salidas a la izquierda)",
+                     tickformat=",.0f")
+    fig.update_yaxes(title_text="", type="category", categoryorder="array",
+                     categoryarray=list(reversed(etiquetas)))
+    return _t(fig)
+
+
+def modelos_vivos(df: pd.DataFrame) -> go.Figure:
+    """Cuántos modelos distintos hay por mes. Una sola línea.
+
+    Es la que detecta un despliegue o un retiro. El área apilada de reparto no
+    la reemplaza: ahí un modelo nuevo con 1% de población es invisible, y acá
+    es un escalón.
+    """
+    if df.empty:
+        return _sin_datos()
+    d = df[df["modelo"].notna()]
+    if d.empty:
+        return _sin_datos()
+    g = d.groupby("idx_mes")["modelo"].nunique().sort_index()
+    etiquetas = [theme.etiqueta_mes_idx(m) for m in g.index]
+    fig = go.Figure(go.Scatter(
+        x=etiquetas, y=g.values, mode="lines+markers",
+        line=dict(color=theme.SERIES[0], width=2),
+        marker=dict(size=8, line=dict(color=theme.SURFACE, width=2)),
+        hovertemplate="%{y} modelos vivos<extra></extra>"))
+    fig.update_layout(height=280)
+    fig.update_xaxes(title_text="", categoryorder="array", categoryarray=etiquetas)
+    fig.update_yaxes(title_text="Modelos distintos en el mes", rangemode="tozero",
+                     dtick=1)
+    return _t(fig)
 
 
 # ===========================================================================

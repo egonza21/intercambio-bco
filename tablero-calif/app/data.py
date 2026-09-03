@@ -263,6 +263,11 @@ def cortes_por_producto() -> pd.DataFrame:
     return _con_grupo(_tabla("cortes_por_producto"))
 
 
+def puente_base() -> pd.DataFrame:
+    """Descomposición de la base: permanece, entrada, salida, por segmento."""
+    return _tabla("puente_base")
+
+
 # --- perfilado: las consultas que responden "¿son confiables estos datos?" --
 # Estas SÍ siguen yendo directo contra la tabla fuente y con parámetros. No se
 # materializan a propósito: son diagnósticas, se corren cuando hacen falta, y
@@ -403,6 +408,7 @@ TABLAS_CONSTRUIDAS = [
     "largo_calificaciones", "base_clientes", "cobertura_producto",
     "distribucion_grupo", "pd_por_modelo", "cortes_por_producto",
     "migracion_r1", "migracion_r6", "migracion_pd_r1", "migracion_pd_r6",
+    "puente_base",
 ]
 
 

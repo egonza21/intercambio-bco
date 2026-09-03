@@ -91,9 +91,10 @@ def barra_lateral() -> None:
 barra_lateral()
 
 paginas = [
-    # Salud del dato va PRIMERA: si algo de ahí está en rojo, los números de
-    # las otras páginas no significan lo que parecen.
-    st.Page("pages/0_salud_dato.py", title="Salud del dato", icon="🩺", default=True),
+    # Anomalías va primera: dice DÓNDE mirar. Salud del dato va segunda: dice
+    # si lo que se mira es confiable. Recién después panorama dice QUÉ pasa.
+    st.Page("pages/0_anomalias.py", title="Qué se movió", icon="🔎", default=True),
+    st.Page("pages/0_salud_dato.py", title="Salud del dato", icon="🩺"),
     st.Page("pages/1_panorama.py", title="Panorama del mes", icon="📊"),
     st.Page("pages/2_evolucion.py", title="Evolución", icon="📈"),
     st.Page("pages/3_migracion.py", title="Migración", icon="🔀"),

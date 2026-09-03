@@ -163,31 +163,86 @@ ESCALA_SECUENCIAL = [
     [0.750, "#02818a"], [0.875, "#016c59"], [1.000, "#014636"],
 ]
 
+def _rampa_secuencial(t: float) -> str:
+    """Muestrea ESCALA_SECUENCIAL. Para series categóricas que superan los
+    cuatro colores de la paleta: el color no identifica, pero ordena."""
+    t = min(1.0, max(0.0, t)) * (len(ESCALA_SECUENCIAL) - 1)
+    i = min(len(ESCALA_SECUENCIAL) - 2, int(t))
+    return _mezcla(ESCALA_SECUENCIAL[i][1], ESCALA_SECUENCIAL[i + 1][1], t - i)
+
+
 # ---------------------------------------------------------------------------
-# Etiquetas de segmento
+# Dimensión de segmento
 # ---------------------------------------------------------------------------
-# Los segmentos llegan como códigos. Este diccionario los traduce a algo
-# legible en los ejes.
+# Los segmentos llegan como códigos y tienen un ORDEN DE VALOR DE NEGOCIO que
+# no es alfabético ni por volumen. Ordenar por volumen entierra Banca Privada,
+# que es la más chica y la más importante.
 #
-# PENDIENTE DE CONFIRMAR: los nombres son un placeholder. Mientras un código no
-# esté acá, `etiqueta_segmento` lo devuelve tal cual, así que agregar entradas
-# es seguro y no rompe nada.
-SEGMENTOS: dict[str, str] = {
-    # "2": "Personal",
-    # "3": "Preferente",
-    # "4": "Pyme",
+# `Independiente` (9) NO va en la misma escala: es una sección distinta del
+# negocio y no es comparable con las otras cinco. Se muestra siempre aparte,
+# nunca como un sexto nivel. Por eso su orden es None y vive en un conjunto
+# separado.
+SEGMENTOS: dict[str, tuple[str, int | None]] = {
+    "S":  ("Social", 1),
+    "4":  ("Personal", 2),
+    "M":  ("Plus", 3),
+    "6":  ("Preferencial", 4),
+    "11": ("Banca Privada", 5),
+    "9":  ("Independiente", None),   # fuera de la escala de valor
 }
+
+# Los que sí forman escala, en orden de valor.
+SEGMENTOS_ESCALA = [c for c, (_, o) in
+                    sorted(SEGMENTOS.items(), key=lambda kv: (kv[1][1] is None,
+                                                              kv[1][1] or 0))
+                    if o is not None]
+SEGMENTOS_APARTE = [c for c, (_, o) in SEGMENTOS.items() if o is None]
+
+
+def _cod(codigo) -> str:
+    return "" if codigo is None else str(codigo).strip()
 
 
 def etiqueta_segmento(codigo) -> str:
-    """Nombre legible del segmento, o el código si no está mapeado.
+    """Nombre legible. Nunca se muestra el código solo en la UI.
 
     Devuelve SIEMPRE un string: si el segmento es un código numérico y llega
     como número, Plotly trata el eje como escala continua y el heatmap sale
     como una banda sin celdas."""
-    if codigo is None:
+    c = _cod(codigo)
+    if not c:
         return "sin segmento"
-    return SEGMENTOS.get(str(codigo).strip(), str(codigo).strip())
+    return SEGMENTOS.get(c, (c, None))[0]
+
+
+def orden_segmento(codigo) -> int:
+    """Posición en la escala de valor. Los que no forman escala y los
+    desconocidos van al final, pero identificados."""
+    c = _cod(codigo)
+    nombre, orden = SEGMENTOS.get(c, (c, None))
+    if orden is not None:
+        return orden
+    return 90 if c in SEGMENTOS_APARTE else 99
+
+
+def fuera_de_escala(codigo) -> bool:
+    """True para los segmentos que no son comparables con la escala de valor."""
+    return _cod(codigo) in SEGMENTOS_APARTE
+
+
+def segmentos_ordenados(valores) -> list[str]:
+    """Los segmentos presentes, por VALOR DE NEGOCIO.
+
+    Nunca alfabético ni por volumen. Devuelve códigos; para mostrarlos hay que
+    pasarlos por etiqueta_segmento(). Los que están fuera de la escala quedan
+    al final, después de los cinco de valor.
+    """
+    presentes = {_cod(v) for v in valores if _cod(v)}
+    return sorted(presentes, key=lambda c: (orden_segmento(c), c))
+
+
+def etiquetas_segmento(codigos) -> list[str]:
+    return [etiqueta_segmento(c) for c in codigos]
 
 
 # ---------------------------------------------------------------------------
@@ -322,6 +377,18 @@ def fmt_miles(n) -> str:
     if n is None:
         return "--"
     return f"{int(round(float(n))):,}".replace(",", ".")
+
+
+def fmt_compacto(n) -> str:
+    """Miles y millones abreviados, para que 96 celdas entren legibles."""
+    if n is None or (isinstance(n, float) and n != n):
+        return ""
+    n = float(n)
+    if abs(n) >= 1_000_000:
+        return f"{n / 1_000_000:.1f}M".replace(".", ",")
+    if abs(n) >= 1_000:
+        return f"{n / 1_000:.0f}k"
+    return f"{n:.0f}"
 
 
 def fmt_pct(x, decimales: int = 1) -> str:

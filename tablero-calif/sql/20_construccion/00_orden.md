@@ -17,6 +17,7 @@ orden, o en paralelo si el clúster lo aguanta.
    ├── 07_migracion_r1
    └── 08_migracion_r6
 
+11_puente_base                   ← usa una tmp propia, tmp_puente_mes
 02_base_clientes                 ┐
 03_cobertura_producto            │  independientes: leen la tabla ancha
 05_pd_por_modelo                 │  directo, no pasan por largo_calificaciones
@@ -46,6 +47,7 @@ Por qué esos cinco no dependen de `largo_calificaciones`:
 08_migracion_r6.sql
 09_migracion_pd_r1.sql
 10_migracion_pd_r6.sql
+11_puente_base.sql
 ```
 
 El prefijo numérico es el orden. Correrlos en ese orden siempre funciona.

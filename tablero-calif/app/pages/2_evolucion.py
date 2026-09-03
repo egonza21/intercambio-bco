@@ -13,6 +13,7 @@ import theme
 
 desde = st.session_state["desde"]
 hasta = st.session_state["hasta"]
+mes_corte = st.session_state["mes"]
 
 st.markdown("# Evolución")
 st.markdown(
@@ -69,13 +70,49 @@ with c1:
     st.plotly_chart(charts.base_clientes_tiempo(base),
                     use_container_width=True, key="p2_base")
 with c2:
-    st.markdown("## Vigencia de modelos")
+    st.markdown("## Modelos vivos por mes")
     st.markdown(
-        '<p class="sub">Participación de la población por modelo. Un escalón '
-        'acá suele explicar un salto en las otras páginas.</p>',
+        '<p class="sub">Cuántos modelos distintos califican cada mes. Es la '
+        'que detecta un despliegue o un retiro: en el área apilada de abajo, '
+        'un modelo nuevo con 1% de población es invisible, y acá es un '
+        'escalón.</p>',
         unsafe_allow_html=True)
-    st.plotly_chart(charts.vigencia_modelos(dist),
-                    use_container_width=True, key="p2_vig")
+    st.plotly_chart(charts.modelos_vivos(dist),
+                    use_container_width=True, key="p2_vivos")
+
+st.markdown("## Reparto de la población entre modelos")
+st.markdown(
+    '<p class="sub">Todos los modelos, sin recortar a los mayores: un modelo '
+    'nuevo entra con poca población y agruparlo en «otros» escondía justo lo '
+    'que interesa ver.</p>',
+    unsafe_allow_html=True)
+st.plotly_chart(charts.vigencia_modelos(dist),
+                use_container_width=True, key="p2_vig")
+
+# --- puente de la base -----------------------------------------------------
+st.markdown("---")
+st.markdown("## Puente de la base")
+st.markdown(
+    '<p class="sub">La base cae, pero <b>por qué</b>. La cascada separa las '
+    'dos causas: si se van clientes se ve en salidas; si dejan de calificar, '
+    'la base no se mueve y lo que baja es la cobertura.</p>',
+    unsafe_allow_html=True)
+puente = _ventana(data.puente_base())
+if puente.empty:
+    st.info("No hay tabla de puente. ¿Se corrió 11_puente_base.sql?")
+else:
+    _segs_p = theme.segmentos_ordenados(puente["segmento"])
+    seg_p = st.selectbox(
+        "Segmento", ["todos"] + _segs_p, key="p2_segpuente",
+        format_func=lambda c: "todos" if c == "todos" else theme.etiqueta_segmento(c))
+    cpa, cpb = st.columns([1, 1.1])
+    with cpa:
+        st.plotly_chart(charts.puente_base(puente, mes_corte, seg_p),
+                        use_container_width=True, key="p2_puente")
+    with cpb:
+        st.markdown("#### Entradas y salidas por segmento")
+        st.plotly_chart(charts.puente_por_segmento(puente, mes_corte),
+                        use_container_width=True, key="p2_puenteseg")
 
 st.markdown(
     '<p class="nota">Las series llevan color <b>y</b> estilo de línea distinto, '
