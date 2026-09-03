@@ -2,40 +2,54 @@
 -- CONSTRUCCIÓN: proceso.pd_por_modelo_{IDUNICO}
 -- ----------------------------------------------------------------------------
 -- Distribución de las DOS PD, por segmento, serie y modelo, en bins fijos.
--- Alimenta el histograma de PD y el PSI.
+-- Alimenta el histograma de PD y el PSI de nivel 3.
 --
 -- NO depende de largo_calificaciones y no debe: la PD es un atributo del
--- CLIENTE, no del producto (CLAUDE.md, "La PD no es por producto"). El cross
--- join es contra 2 series, no contra 16 productos, y el filtro es
--- `pd IS NOT NULL`, no `grupo IS NOT NULL` -- la población correcta acá es la
--- que el modelo alcanzó a calificar, tenga o no grupo en algún producto.
+-- CLIENTE, no del producto. El cross join es contra 2 series, no contra 16
+-- productos, y el filtro es `pd IS NOT NULL`, no `grupo IS NOT NULL`.
 --
 -- El modelo se toma con un CASE que sigue el MISMO orden que el COALESCE de la
 -- PD, para que ambos vengan de la misma columna.
 --
 -- Bins logarítmicos para probabilidad (20 por década) y lineales de 50 para
--- puntaje. Bordes FIJOS: es la condición para que el PSI signifique algo.
+-- puntaje. Bordes FIJOS: condición para que el PSI signifique algo.
 --
--- La escala sale de una LISTA EXPLÍCITA de modelos. Hay que actualizarla
--- cuando entre un modelo nuevo de puntaje; el síntoma de olvidarlo es un
--- histograma con bins absurdos, no un error. Ver CLAUDE.md, "Modelos y su
--- escala", y el chequeo 3 de la página de salud del dato.
+-- La escala sale de una LISTA EXPLÍCITA de modelos, que hay que actualizar
+-- cuando entre uno nuevo de puntaje. Ver CLAUDE.md, "Modelos y su escala".
 --
--- SIN PARÁMETROS: toda la ventana disponible.
+-- ----------------------------------------------------------------------------
+-- SIN CTEs: cada paso intermedio es una tabla física
+-- ----------------------------------------------------------------------------
+-- Impala no materializa los CTEs, los inlinea. Encadenar varios en un mismo
+-- CREATE TABLE AS deja todos los intermedios en memoria dentro de un solo
+-- plan, que es lo que hacía cancelar las ETL pesadas. Con tablas físicas cada
+-- paso va a disco y el `compute stats` de cada una le da al planificador los
+-- tamaños reales antes del paso que la consume.
+--
+-- Las tmp_ se borran al final, cuando la tabla definitiva ya existe. Los drop
+-- del arranque limpian las que hayan quedado de una corrida interrumpida.
 -- ============================================================================
 
-drop table if exists proceso.pd_por_modelo_{IDUNICO} purge;
+drop table if exists proceso.tmp_pd_series_{IDUNICO} purge;
+drop table if exists proceso.tmp_pd_cliente_{IDUNICO} purge;
+drop table if exists proceso.tmp_pd_larga_{IDUNICO} purge;
+drop table if exists proceso.tmp_pd_escalado_{IDUNICO} purge;
+drop table if exists proceso.tmp_pd_binned_{IDUNICO} purge;
 
-create table proceso.pd_por_modelo_{IDUNICO}
+-- --- 1. las dos series -------------------------------------------------------
+create table proceso.tmp_pd_series_{IDUNICO}
 stored as parquet
 as
-with series as (
               select 1 as idx, 'general'  as serie_pd
-    union all select 2,        'vivienda'
-),
+    union all select 2,        'vivienda';
 
-pd_cliente as (
-  select
+compute stats proceso.tmp_pd_series_{IDUNICO};
+
+-- --- 2. las dos PD del cliente, cada una con SU modelo -----------------------
+create table proceso.tmp_pd_cliente_{IDUNICO}
+stored as parquet
+as
+select
     c.ingestion_year,
     c.ingestion_month,
     c.segmento,
@@ -67,10 +81,20 @@ pd_cliente as (
       when c.pd_lea_hab_novis is not null then c.modelo_lea_hab_novis
     end as modelo_vivienda
   from resultados_riesgos.maestro_calificaciones_pn c
-),
+  -- Salvaguarda contra ingestas parciales de principios de mes. Ver CLAUDE.md,
+  -- "El filtro de ingestion_day". HOY NO DESCARTA NADA: los días observados van
+  -- de 19 a 24. Está justamente para el día en que aparezca una carga a medias,
+  -- y por eso queda escrito para qué sirve -- si no, dentro de seis meses
+  -- alguien lo borra por parecer inútil.
+  where c.ingestion_day >= 15;
 
-series_pd as (
-  select
+compute stats proceso.tmp_pd_cliente_{IDUNICO};
+
+-- --- 3. a formato largo: 2 filas por cliente ---------------------------------
+create table proceso.tmp_pd_larga_{IDUNICO}
+stored as parquet
+as
+select
     p.ingestion_year,
     p.ingestion_month,
     p.segmento,
@@ -83,27 +107,35 @@ series_pd as (
       when 1 then p.modelo_general
       when 2 then p.modelo_vivienda
     end), '') as modelo
-  from pd_cliente p
-  cross join series s
-),
+  from proceso.tmp_pd_cliente_{IDUNICO} p
+  cross join proceso.tmp_pd_series_{IDUNICO} s;
 
-escalado as (
-  select
-    sp.ingestion_year,
-    sp.ingestion_month,
-    sp.segmento,
-    sp.serie_pd,
-    sp.modelo,
-    sp.pd,
-    case when sp.modelo in ('ADVANCE_1_1', 'ADVANCE_INCLUSION')
+compute stats proceso.tmp_pd_larga_{IDUNICO};
+
+-- --- 4. escala por modelo ----------------------------------------------------
+create table proceso.tmp_pd_escalado_{IDUNICO}
+stored as parquet
+as
+select
+    l.ingestion_year,
+    l.ingestion_month,
+    l.segmento,
+    l.serie_pd,
+    l.modelo,
+    l.pd,
+    case when l.modelo in ('ADVANCE_1_1', 'ADVANCE_INCLUSION')
          then 'puntaje_0_999'
          else 'probabilidad_0_1' end as escala
-  from series_pd sp
-  where sp.pd is not null
-),
+  from proceso.tmp_pd_larga_{IDUNICO} l
+  where l.pd is not null;
 
-binned as (
-  select
+compute stats proceso.tmp_pd_escalado_{IDUNICO};
+
+-- --- 5. bin de cada fila -----------------------------------------------------
+create table proceso.tmp_pd_binned_{IDUNICO}
+stored as parquet
+as
+select
     e.ingestion_year,
     e.ingestion_month,
     e.segmento,
@@ -115,9 +147,16 @@ binned as (
          then least(cast(floor(e.pd / 50.0) as int), 19)
          else cast(floor(log10(greatest(e.pd, 0.000001)) * 20) as int)
     end as bin
-  from escalado e
-)
+  from proceso.tmp_pd_escalado_{IDUNICO} e;
 
+compute stats proceso.tmp_pd_binned_{IDUNICO};
+
+-- --- 6. tabla final ----------------------------------------------------------
+drop table if exists proceso.pd_por_modelo_{IDUNICO} purge;
+
+create table proceso.pd_por_modelo_{IDUNICO}
+stored as parquet
+as
 select
   b.ingestion_year,
   b.ingestion_month,
@@ -139,7 +178,7 @@ select
   sum(b.pd)  as pd_suma,
   min(b.pd)  as pd_min,
   max(b.pd)  as pd_max
-from binned b
+from proceso.tmp_pd_binned_{IDUNICO} b
 group by
   b.ingestion_year,
   b.ingestion_month,
@@ -150,3 +189,10 @@ group by
   b.bin;
 
 compute stats proceso.pd_por_modelo_{IDUNICO};
+
+-- --- 7. limpieza -------------------------------------------------------------
+drop table if exists proceso.tmp_pd_series_{IDUNICO} purge;
+drop table if exists proceso.tmp_pd_cliente_{IDUNICO} purge;
+drop table if exists proceso.tmp_pd_larga_{IDUNICO} purge;
+drop table if exists proceso.tmp_pd_escalado_{IDUNICO} purge;
+drop table if exists proceso.tmp_pd_binned_{IDUNICO} purge;

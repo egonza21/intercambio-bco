@@ -12,6 +12,11 @@
 -- verificación puntual, por si hace falta reconfirmar el estado de la
 -- partición antes de correr los agregados.
 --
+-- ESTA CONSULTA NO LLEVA EL FILTRO `ingestion_day >= 15`, a diferencia del
+-- resto del repo. Es deliberado: su trabajo es detectar ingestas anómalas, y
+-- filtrarlas la dejaría ciega justo para lo que existe. Si un mes llega con
+-- una carga parcial de día 3, esta consulta tiene que verla.
+--
 -- Parámetros:
 --   {DESDE}, {HASTA} -- rango de meses, en ingestion_year*12+ingestion_month
 -- ============================================================================

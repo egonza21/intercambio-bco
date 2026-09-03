@@ -82,6 +82,9 @@ largo as (
   from resultados_riesgos.maestro_calificaciones_pn c
   cross join productos p
   where c.ingestion_year * 12 + c.ingestion_month between {DESDE} and {HASTA}
+  -- Salvaguarda contra ingestas parciales de principios de mes. Ver
+  -- CLAUDE.md, "El filtro de ingestion_day".
+    and c.ingestion_day >= 15
 )
 
 select

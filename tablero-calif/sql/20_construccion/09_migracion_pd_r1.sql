@@ -6,26 +6,6 @@
 -- NO depende de largo_calificaciones: la PD es del cliente, no del producto,
 -- así que el cross join es contra 2 series y no contra 16 productos.
 --
--- ----------------------------------------------------------------------------
--- POR QUÉ ESTÁ PARTIDO EN TABLAS INTERMEDIAS
--- ----------------------------------------------------------------------------
--- Mismo motivo que la migración de grupo, más uno propio: el `ntile` obliga a
--- un sort completo por partición, y encadenarlo con el full outer join en el
--- mismo plan es lo que hace que Impala se quede sin memoria.
---
---   tmp_migracion_pd_r1_deciles  el ntile, materializado UNA vez
---   tmp_migracion_pd_r1_base     presencia del cliente por mes
---   tmp_migracion_pd_r1_par      el full outer join
---
--- Materializar los deciles tiene una ganancia extra: antes el CTE se
--- referenciaba dos veces (origen y destino) y, como Impala inlinea, el sort
--- corría DOS veces. Ahora corre una.
---
--- El `compute stats` de cada intermedia va antes del join que la usa.
--- Las intermedias se borran al final; los drop del arranque limpian las que
--- hayan quedado de una corrida interrumpida.
---
--- ----------------------------------------------------------------------------
 -- DECILES POR PERÍODO, a diferencia de los bins fijos de pd_por_modelo. Acá la
 -- pregunta es de reordenamiento del ranking, no de desplazamiento de la
 -- distribución: una diagonal fuerte dice que el orden se mantuvo, NO que la PD
@@ -35,23 +15,46 @@
 -- entregan puntaje 0-999 y el resto probabilidad 0-1, así que rankearlos
 -- juntos mandaría a esos clientes a los deciles altos por escala, no por
 -- riesgo.
+--
+-- Materializar los deciles tiene una ganancia extra sobre el resto: antes el
+-- CTE se referenciaba dos veces (origen y destino) y, como Impala inlinea, el
+-- sort completo corría DOS veces. Ahora corre una.
+--
+-- ----------------------------------------------------------------------------
+-- SIN CTEs: cada paso intermedio es una tabla física
+-- ----------------------------------------------------------------------------
+-- Impala no materializa los CTEs, los inlinea. Encadenar varios en un mismo
+-- CREATE TABLE AS deja todos los intermedios en memoria dentro de un solo
+-- plan, que es lo que hacía cancelar las ETL pesadas. Con tablas físicas cada
+-- paso va a disco y el `compute stats` de cada una le da al planificador los
+-- tamaños reales antes del paso que la consume.
+--
+-- Las tmp_ se borran al final, cuando la tabla definitiva ya existe. Los drop
+-- del arranque limpian las que hayan quedado de una corrida interrumpida.
 -- ============================================================================
 
+drop table if exists proceso.tmp_migracion_pd_r1_series_{IDUNICO} purge;
+drop table if exists proceso.tmp_migracion_pd_r1_cliente_{IDUNICO} purge;
+drop table if exists proceso.tmp_migracion_pd_r1_larga_{IDUNICO} purge;
 drop table if exists proceso.tmp_migracion_pd_r1_deciles_{IDUNICO} purge;
 drop table if exists proceso.tmp_migracion_pd_r1_base_{IDUNICO} purge;
 drop table if exists proceso.tmp_migracion_pd_r1_par_{IDUNICO} purge;
+drop table if exists proceso.tmp_migracion_pd_r1_clasificado_{IDUNICO} purge;
 
--- --- 1. las dos PD del cliente y su decil, materializados --------------------
-create table proceso.tmp_migracion_pd_r1_deciles_{IDUNICO}
+-- --- 1. las dos series -------------------------------------------------------
+create table proceso.tmp_migracion_pd_r1_series_{IDUNICO}
 stored as parquet
 as
-with series as (
               select 1 as idx, 'general'  as serie_pd
-    union all select 2,        'vivienda'
-),
+    union all select 2,        'vivienda';
 
-pd_cliente as (
-  select
+compute stats proceso.tmp_migracion_pd_r1_series_{IDUNICO};
+
+-- --- 2. las dos PD del cliente, cada una con SU modelo -----------------------
+create table proceso.tmp_migracion_pd_r1_cliente_{IDUNICO}
+stored as parquet
+as
+select
     c.num_doc,
     c.tipo_doc,
     c.ingestion_year * 12 + c.ingestion_month as idx_mes,
@@ -83,10 +86,20 @@ pd_cliente as (
       when c.pd_lea_hab_novis is not null then c.modelo_lea_hab_novis
     end as modelo_vivienda
   from resultados_riesgos.maestro_calificaciones_pn c
-),
+  -- Salvaguarda contra ingestas parciales de principios de mes. Ver CLAUDE.md,
+  -- "El filtro de ingestion_day". HOY NO DESCARTA NADA: los días observados van
+  -- de 19 a 24. Está justamente para el día en que aparezca una carga a medias,
+  -- y por eso queda escrito para qué sirve -- si no, dentro de seis meses
+  -- alguien lo borra por parecer inútil.
+  where c.ingestion_day >= 15;
 
-series_pd as (
-  select
+compute stats proceso.tmp_migracion_pd_r1_cliente_{IDUNICO};
+
+-- --- 3. a formato largo ------------------------------------------------------
+create table proceso.tmp_migracion_pd_r1_larga_{IDUNICO}
+stored as parquet
+as
+select
     p.num_doc,
     p.tipo_doc,
     p.idx_mes,
@@ -99,38 +112,49 @@ series_pd as (
       when 1 then p.modelo_general
       when 2 then p.modelo_vivienda
     end), '') as modelo
-  from pd_cliente p
-  cross join series s
-)
+  from proceso.tmp_migracion_pd_r1_cliente_{IDUNICO} p
+  cross join proceso.tmp_migracion_pd_r1_series_{IDUNICO} s;
 
+compute stats proceso.tmp_migracion_pd_r1_larga_{IDUNICO};
+
+-- --- 4. el ntile, materializado UNA vez --------------------------------------
+create table proceso.tmp_migracion_pd_r1_deciles_{IDUNICO}
+stored as parquet
+as
 select
-  sp.num_doc,
-  sp.tipo_doc,
-  sp.idx_mes,
-  sp.serie_pd,
-  sp.modelo,
-  ntile(10) over (
-    partition by sp.serie_pd, sp.modelo, sp.idx_mes
-    order by sp.pd
-  ) as decil
-from series_pd sp
-where sp.pd is not null;
+    l.num_doc,
+    l.tipo_doc,
+    l.idx_mes,
+    l.serie_pd,
+    l.modelo,
+    ntile(10) over (
+      partition by l.serie_pd, l.modelo, l.idx_mes
+      order by l.pd
+    ) as decil
+  from proceso.tmp_migracion_pd_r1_larga_{IDUNICO} l
+  where l.pd is not null;
 
 compute stats proceso.tmp_migracion_pd_r1_deciles_{IDUNICO};
 
--- --- 2. presencia del cliente por mes ---------------------------------------
+-- --- 5. presencia del cliente por mes ----------------------------------------
 create table proceso.tmp_migracion_pd_r1_base_{IDUNICO}
 stored as parquet
 as
 select
-  c.num_doc,
-  c.tipo_doc,
-  c.ingestion_year * 12 + c.ingestion_month as idx_mes
-from resultados_riesgos.maestro_calificaciones_pn c;
+    c.num_doc,
+    c.tipo_doc,
+    c.ingestion_year * 12 + c.ingestion_month as idx_mes
+  from resultados_riesgos.maestro_calificaciones_pn c
+  -- Salvaguarda contra ingestas parciales de principios de mes. Ver CLAUDE.md,
+  -- "El filtro de ingestion_day". HOY NO DESCARTA NADA: los días observados van
+  -- de 19 a 24. Está justamente para el día en que aparezca una carga a medias,
+  -- y por eso queda escrito para qué sirve -- si no, dentro de seis meses
+  -- alguien lo borra por parecer inútil.
+  where c.ingestion_day >= 15;
 
 compute stats proceso.tmp_migracion_pd_r1_base_{IDUNICO};
 
--- --- 3. el full outer join, materializado -----------------------------------
+-- --- 6. el full outer join ---------------------------------------------------
 create table proceso.tmp_migracion_pd_r1_par_{IDUNICO}
 stored as parquet
 as
@@ -138,7 +162,7 @@ select
   coalesce(d.num_doc,  o.num_doc)              as num_doc,
   coalesce(d.tipo_doc, o.tipo_doc)             as tipo_doc,
   coalesce(d.serie_pd, o.serie_pd)             as serie_pd,
-  coalesce(d.idx_mes,  o.idx_mes + 1)      as idx_mes_destino,
+  coalesce(d.idx_mes,  o.idx_mes + 1)         as idx_mes_destino,
   o.modelo                                     as modelo_origen,
   d.modelo                                     as modelo_destino,
   o.decil                                      as decil_origen,
@@ -156,37 +180,41 @@ full outer join proceso.tmp_migracion_pd_r1_deciles_{IDUNICO} o
 
 compute stats proceso.tmp_migracion_pd_r1_par_{IDUNICO};
 
--- --- 4. clasificación y agregado final --------------------------------------
+-- --- 7. clasificación --------------------------------------------------------
+create table proceso.tmp_migracion_pd_r1_clasificado_{IDUNICO}
+stored as parquet
+as
+select
+  p.serie_pd,
+  p.idx_mes_destino,
+  cast(floor((p.idx_mes_destino - 1) / 12) as smallint) as ingestion_year,
+  p.modelo_origen,
+  p.modelo_destino,
+  p.decil_origen,
+  p.decil_destino,
+  case
+    when p.decil_origen is not null
+     and p.decil_destino is not null       then 'movimiento'
+    when p.decil_origen is null
+     and b.num_doc is null                 then 'entrada'
+    when p.decil_origen is null            then 'ganancia_pd'
+    when b.num_doc is null                 then 'salida'
+    else                                        'perdida_pd'
+  end as categoria
+from proceso.tmp_migracion_pd_r1_par_{IDUNICO} p
+left join proceso.tmp_migracion_pd_r1_base_{IDUNICO} b
+  on  b.num_doc  = p.num_doc
+  and b.tipo_doc = p.tipo_doc
+  and b.idx_mes  = p.idx_mes_presencia;
+
+compute stats proceso.tmp_migracion_pd_r1_clasificado_{IDUNICO};
+
+-- --- 8. tabla final ----------------------------------------------------------
 drop table if exists proceso.migracion_pd_r1_{IDUNICO} purge;
 
 create table proceso.migracion_pd_r1_{IDUNICO}
 stored as parquet
 as
-with clasificado as (
-  select
-    p.serie_pd,
-    p.idx_mes_destino,
-    cast(floor((p.idx_mes_destino - 1) / 12) as smallint) as ingestion_year,
-    p.modelo_origen,
-    p.modelo_destino,
-    p.decil_origen,
-    p.decil_destino,
-    case
-      when p.decil_origen is not null
-       and p.decil_destino is not null       then 'movimiento'
-      when p.decil_origen is null
-       and b.num_doc is null                 then 'entrada'
-      when p.decil_origen is null            then 'ganancia_pd'
-      when b.num_doc is null                 then 'salida'
-      else                                        'perdida_pd'
-    end as categoria
-  from proceso.tmp_migracion_pd_r1_par_{IDUNICO} p
-  left join proceso.tmp_migracion_pd_r1_base_{IDUNICO} b
-    on  b.num_doc  = p.num_doc
-    and b.tipo_doc = p.tipo_doc
-    and b.idx_mes  = p.idx_mes_presencia
-)
-
 select
   c.ingestion_year,
   cast(c.idx_mes_destino - 12 * c.ingestion_year as tinyint) as ingestion_month,
@@ -198,7 +226,7 @@ select
   c.decil_destino,
   c.categoria,
   count(*) as clientes
-from clasificado c
+from proceso.tmp_migracion_pd_r1_clasificado_{IDUNICO} c
 group by
   c.ingestion_year,
   c.idx_mes_destino,
@@ -211,7 +239,11 @@ group by
 
 compute stats proceso.migracion_pd_r1_{IDUNICO};
 
--- --- 5. las intermedias ya no hacen falta ------------------------------------
+-- --- 9. limpieza -------------------------------------------------------------
+drop table if exists proceso.tmp_migracion_pd_r1_series_{IDUNICO} purge;
+drop table if exists proceso.tmp_migracion_pd_r1_cliente_{IDUNICO} purge;
+drop table if exists proceso.tmp_migracion_pd_r1_larga_{IDUNICO} purge;
 drop table if exists proceso.tmp_migracion_pd_r1_deciles_{IDUNICO} purge;
 drop table if exists proceso.tmp_migracion_pd_r1_base_{IDUNICO} purge;
 drop table if exists proceso.tmp_migracion_pd_r1_par_{IDUNICO} purge;
+drop table if exists proceso.tmp_migracion_pd_r1_clasificado_{IDUNICO} purge;

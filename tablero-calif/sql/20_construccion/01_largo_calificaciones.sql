@@ -1,49 +1,39 @@
 -- ============================================================================
 -- CONSTRUCCIÓN: proceso.largo_calificaciones_{IDUNICO}
 -- ----------------------------------------------------------------------------
--- Materializa el unpivot. Es la tabla intermedia sobre la que se apoyan los
--- agregados que necesitan el detalle por producto, y la razón principal por la
--- que vale la pena tener permisos de escritura: el cross join contra los 16
--- productos se paga UNA vez por construcción en vez de repetirse en cada
--- agregado.
+-- Materializa el unpivot. Es la tabla sobre la que se apoyan los agregados que
+-- necesitan detalle por producto: el cross join contra los 16 productos se
+-- paga UNA vez por construcción en vez de repetirse en cada agregado.
 --
--- La consumen: 04_distribucion_grupo, 06_cortes_por_producto,
--- 07_migracion_r1 y 08_migracion_r6. Tiene que existir antes que ellas.
--- Ver 00_orden.md.
+-- La consumen: 04, 06, 07 y 08. Tiene que existir antes que ellas.
 --
--- SIN PARÁMETROS: construye toda la ventana disponible. El filtro de meses lo
--- hace la app en pandas, sobre el resultado ya cargado en memoria.
---
--- ----------------------------------------------------------------------------
--- Qué lleva y qué no
--- ----------------------------------------------------------------------------
--- Lleva el filtro `grupo IS NOT NULL`: es el criterio estándar de "el cliente
--- califica en este producto" (CLAUDE.md, "Filtro de nulos estándar"). Eso saca
--- del orden de 240 MM de filas por mes a las que efectivamente tienen
--- calificación, que es de lo que se puede hacer una tabla.
---
--- OJO: por eso mismo esta tabla NO sirve para medir cobertura. La cobertura
--- necesita justamente las filas sin grupo, y se calcula sobre la tabla ancha
--- en 03_cobertura_producto.
---
--- Lleva `grupo_base` porque la matriz de migración lo usa como eje y conviene
--- calcularlo una vez. NO lleva `grupo_orden`: es presentacional, lo reconstruye
--- la app desde theme.DIM_GRUPO.
---
--- Lleva `idx_mes` ya calculado: la migración se une contra idx_mes - rezago y
--- así el join no repite la aritmética en cada fila.
+-- Lleva `grupo IS NOT NULL`, así que NO sirve para medir cobertura: esa
+-- necesita justamente las filas sin grupo y sale de la tabla ancha en 03.
 --
 -- El mapeo idx -> columna es el de sql/_fragmentos/cte_productos.sql. Los tres
 -- bloques `case p.idx` tienen que estar alineados con esa copia; es lo que
 -- valida sql/00_perfilado/validacion_mapeo.sql.
+--
+-- ----------------------------------------------------------------------------
+-- SIN CTEs: cada paso intermedio es una tabla física
+-- ----------------------------------------------------------------------------
+-- Impala no materializa los CTEs, los inlinea. Encadenar varios en un mismo
+-- CREATE TABLE AS deja todos los intermedios en memoria dentro de un solo
+-- plan, que es lo que hacía cancelar las ETL pesadas. Con tablas físicas cada
+-- paso va a disco y el `compute stats` de cada una le da al planificador los
+-- tamaños reales antes del paso que la consume.
+--
+-- Las tmp_ se borran al final, cuando la tabla definitiva ya existe. Los drop
+-- del arranque limpian las que hayan quedado de una corrida interrumpida.
 -- ============================================================================
 
-drop table if exists proceso.largo_calificaciones_{IDUNICO} purge;
+drop table if exists proceso.tmp_productos_{IDUNICO} purge;
+drop table if exists proceso.tmp_largo_raw_{IDUNICO} purge;
 
-create table proceso.largo_calificaciones_{IDUNICO}
+-- --- 1. el mapeo idx -> producto, como tabla de 16 filas ---------------------
+create table proceso.tmp_productos_{IDUNICO}
 stored as parquet
 as
-with productos as (
               select 1  as idx, 'consumo' as producto, 'consumo' as familia_producto
     union all select 2,  'tdc',           'consumo'
     union all select 3,  'libranza',      'consumo'
@@ -59,11 +49,15 @@ with productos as (
     union all select 13, 'sufi_moto',     'sufi'
     union all select 14, 'sufi_cpe',      'sufi'
     union all select 15, 'sufi_con',      'sufi'
-    union all select 16, 'calm',          'consumo'
-),
+    union all select 16, 'calm',          'consumo';
 
-largo_raw as (
-  select
+compute stats proceso.tmp_productos_{IDUNICO};
+
+-- --- 2. el unpivot crudo ----------------------------------------------------
+create table proceso.tmp_largo_raw_{IDUNICO}
+stored as parquet
+as
+select
     c.num_doc,
     c.tipo_doc,
     c.ingestion_year,
@@ -102,9 +96,22 @@ largo_raw as (
       when 15 then c.modelo_sufi_con      when 16 then c.modelo_calm
     end as modelo
   from resultados_riesgos.maestro_calificaciones_pn c
-  cross join productos p
-)
+  cross join proceso.tmp_productos_{IDUNICO} p
+  -- Salvaguarda contra ingestas parciales de principios de mes. Ver CLAUDE.md,
+  -- "El filtro de ingestion_day". HOY NO DESCARTA NADA: los días observados van
+  -- de 19 a 24. Está justamente para el día en que aparezca una carga a medias,
+  -- y por eso queda escrito para qué sirve -- si no, dentro de seis meses
+  -- alguien lo borra por parecer inútil.
+  where c.ingestion_day >= 15;
 
+compute stats proceso.tmp_largo_raw_{IDUNICO};
+
+-- --- 3. tabla final ---------------------------------------------------------
+drop table if exists proceso.largo_calificaciones_{IDUNICO} purge;
+
+create table proceso.largo_calificaciones_{IDUNICO}
+stored as parquet
+as
 select
   r.num_doc,
   r.tipo_doc,
@@ -118,9 +125,11 @@ select
   r.grupo,
   regexp_replace(r.grupo, '_[BMA]$', '') as grupo_base,
   nullif(trim(r.modelo), '') as modelo
-from largo_raw r
+from proceso.tmp_largo_raw_{IDUNICO} r
 where r.grupo is not null;
 
--- Sin estadísticas, Impala elige planes de join malos. Se nota sobre todo en
--- la migración, que cruza esta tabla contra sí misma.
 compute stats proceso.largo_calificaciones_{IDUNICO};
+
+-- --- 4. limpieza ------------------------------------------------------------
+drop table if exists proceso.tmp_productos_{IDUNICO} purge;
+drop table if exists proceso.tmp_largo_raw_{IDUNICO} purge;

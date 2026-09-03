@@ -101,6 +101,9 @@ largo as (
   from resultados_riesgos.maestro_calificaciones_pn c
   cross join productos p
   where c.ingestion_year * 12 + c.ingestion_month between {DESDE} and {HASTA}
+  -- Salvaguarda contra ingestas parciales de principios de mes. Ver
+  -- CLAUDE.md, "El filtro de ingestion_day".
+    and c.ingestion_day >= 15
 ),
 
 conteo_largo as (
@@ -121,66 +124,114 @@ conteos_ancho as (
               select 'consumo' as producto, count(c.g_consumo) as conteo_ancho
               from resultados_riesgos.maestro_calificaciones_pn c
               where c.ingestion_year * 12 + c.ingestion_month between {DESDE} and {HASTA}
+  -- Salvaguarda contra ingestas parciales de principios de mes. Ver
+  -- CLAUDE.md, "El filtro de ingestion_day".
+    and c.ingestion_day >= 15
 
     union all select 'tdc', count(c.g_tdc)
               from resultados_riesgos.maestro_calificaciones_pn c
               where c.ingestion_year * 12 + c.ingestion_month between {DESDE} and {HASTA}
+  -- Salvaguarda contra ingestas parciales de principios de mes. Ver
+  -- CLAUDE.md, "El filtro de ingestion_day".
+    and c.ingestion_day >= 15
 
     union all select 'libranza', count(c.g_libranza)
               from resultados_riesgos.maestro_calificaciones_pn c
               where c.ingestion_year * 12 + c.ingestion_month between {DESDE} and {HASTA}
+  -- Salvaguarda contra ingestas parciales de principios de mes. Ver
+  -- CLAUDE.md, "El filtro de ingestion_day".
+    and c.ingestion_day >= 15
 
     union all select 'rotativo', count(c.g_rota)
               from resultados_riesgos.maestro_calificaciones_pn c
               where c.ingestion_year * 12 + c.ingestion_month between {DESDE} and {HASTA}
+  -- Salvaguarda contra ingestas parciales de principios de mes. Ver
+  -- CLAUDE.md, "El filtro de ingestion_day".
+    and c.ingestion_day >= 15
 
     union all select 'hip_vis', count(c.g_hip_vis)
               from resultados_riesgos.maestro_calificaciones_pn c
               where c.ingestion_year * 12 + c.ingestion_month between {DESDE} and {HASTA}
+  -- Salvaguarda contra ingestas parciales de principios de mes. Ver
+  -- CLAUDE.md, "El filtro de ingestion_day".
+    and c.ingestion_day >= 15
 
     union all select 'hip_novis', count(c.g_hip_novis)
               from resultados_riesgos.maestro_calificaciones_pn c
               where c.ingestion_year * 12 + c.ingestion_month between {DESDE} and {HASTA}
+  -- Salvaguarda contra ingestas parciales de principios de mes. Ver
+  -- CLAUDE.md, "El filtro de ingestion_day".
+    and c.ingestion_day >= 15
 
     union all select 'lea_hab_vis', count(c.g_lea_hab_vis)
               from resultados_riesgos.maestro_calificaciones_pn c
               where c.ingestion_year * 12 + c.ingestion_month between {DESDE} and {HASTA}
+  -- Salvaguarda contra ingestas parciales de principios de mes. Ver
+  -- CLAUDE.md, "El filtro de ingestion_day".
+    and c.ingestion_day >= 15
 
     union all select 'lea_hab_novis', count(c.g_lea_hab_novis)
               from resultados_riesgos.maestro_calificaciones_pn c
               where c.ingestion_year * 12 + c.ingestion_month between {DESDE} and {HASTA}
+  -- Salvaguarda contra ingestas parciales de principios de mes. Ver
+  -- CLAUDE.md, "El filtro de ingestion_day".
+    and c.ingestion_day >= 15
 
     union all select 'comercial', count(c.g_comercial)
               from resultados_riesgos.maestro_calificaciones_pn c
               where c.ingestion_year * 12 + c.ingestion_month between {DESDE} and {HASTA}
+  -- Salvaguarda contra ingestas parciales de principios de mes. Ver
+  -- CLAUDE.md, "El filtro de ingestion_day".
+    and c.ingestion_day >= 15
 
     union all select 'micro', count(c.g_micro)
               from resultados_riesgos.maestro_calificaciones_pn c
               where c.ingestion_year * 12 + c.ingestion_month between {DESDE} and {HASTA}
+  -- Salvaguarda contra ingestas parciales de principios de mes. Ver
+  -- CLAUDE.md, "El filtro de ingestion_day".
+    and c.ingestion_day >= 15
 
     union all select 'sobregiro', count(c.g_sobre)
               from resultados_riesgos.maestro_calificaciones_pn c
               where c.ingestion_year * 12 + c.ingestion_month between {DESDE} and {HASTA}
+  -- Salvaguarda contra ingestas parciales de principios de mes. Ver
+  -- CLAUDE.md, "El filtro de ingestion_day".
+    and c.ingestion_day >= 15
 
     union all select 'sufi_veh', count(c.g_sufi_veh)
               from resultados_riesgos.maestro_calificaciones_pn c
               where c.ingestion_year * 12 + c.ingestion_month between {DESDE} and {HASTA}
+  -- Salvaguarda contra ingestas parciales de principios de mes. Ver
+  -- CLAUDE.md, "El filtro de ingestion_day".
+    and c.ingestion_day >= 15
 
     union all select 'sufi_moto', count(c.g_sufi_moto)
               from resultados_riesgos.maestro_calificaciones_pn c
               where c.ingestion_year * 12 + c.ingestion_month between {DESDE} and {HASTA}
+  -- Salvaguarda contra ingestas parciales de principios de mes. Ver
+  -- CLAUDE.md, "El filtro de ingestion_day".
+    and c.ingestion_day >= 15
 
     union all select 'sufi_cpe', count(c.g_sufi_cpe)
               from resultados_riesgos.maestro_calificaciones_pn c
               where c.ingestion_year * 12 + c.ingestion_month between {DESDE} and {HASTA}
+  -- Salvaguarda contra ingestas parciales de principios de mes. Ver
+  -- CLAUDE.md, "El filtro de ingestion_day".
+    and c.ingestion_day >= 15
 
     union all select 'sufi_con', count(c.g_sufi_con)
               from resultados_riesgos.maestro_calificaciones_pn c
               where c.ingestion_year * 12 + c.ingestion_month between {DESDE} and {HASTA}
+  -- Salvaguarda contra ingestas parciales de principios de mes. Ver
+  -- CLAUDE.md, "El filtro de ingestion_day".
+    and c.ingestion_day >= 15
 
     union all select 'calm', count(c.g_calm)
               from resultados_riesgos.maestro_calificaciones_pn c
               where c.ingestion_year * 12 + c.ingestion_month between {DESDE} and {HASTA}
+  -- Salvaguarda contra ingestas parciales de principios de mes. Ver
+  -- CLAUDE.md, "El filtro de ingestion_day".
+    and c.ingestion_day >= 15
 )
 
 select

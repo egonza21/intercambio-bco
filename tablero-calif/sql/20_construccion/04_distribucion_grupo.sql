@@ -1,20 +1,27 @@
 -- ============================================================================
 -- CONSTRUCCIÓN: proceso.distribucion_grupo_{IDUNICO}
 -- ----------------------------------------------------------------------------
--- Composición de la cartera por grupo de riesgo. Alimenta la barra apilada,
--- el heatmap segmento x grupo y la vigencia de modelos.
+-- Composición de la cartera por grupo de riesgo. Alimenta la barra apilada, el
+-- heatmap segmento x grupo y la vigencia de modelos.
 --
--- DEPENDE de proceso.largo_calificaciones_{IDUNICO}. Ver 00_orden.md.
+-- DEPENDE de proceso.largo_calificaciones_{IDUNICO}.
 --
 -- Nada de `pd`: solo hay dos PD por cliente, no 16, así que traerla con
--- `producto` en el grano invitaba a sumar la misma PD doce veces. Ver
--- CLAUDE.md, "La PD no es por producto".
+-- `producto` en el grano invitaba a sumar la misma PD doce veces.
 --
--- `grupo_base` y `grupo_orden` tampoco: son presentacionales y los resuelve
--- la app desde theme.DIM_GRUPO.
+-- No tiene pasos intermedios: un agregado sobre la tabla larga.
 --
--- El filtro de grupo ya viene aplicado en la tabla de origen.
--- SIN PARÁMETROS: toda la ventana disponible.
+-- ----------------------------------------------------------------------------
+-- SIN CTEs: cada paso intermedio es una tabla física
+-- ----------------------------------------------------------------------------
+-- Impala no materializa los CTEs, los inlinea. Encadenar varios en un mismo
+-- CREATE TABLE AS deja todos los intermedios en memoria dentro de un solo
+-- plan, que es lo que hacía cancelar las ETL pesadas. Con tablas físicas cada
+-- paso va a disco y el `compute stats` de cada una le da al planificador los
+-- tamaños reales antes del paso que la consume.
+--
+-- Las tmp_ se borran al final, cuando la tabla definitiva ya existe. Los drop
+-- del arranque limpian las que hayan quedado de una corrida interrumpida.
 -- ============================================================================
 
 drop table if exists proceso.distribucion_grupo_{IDUNICO} purge;

@@ -118,23 +118,36 @@ en `_nueva` y hacer swap con dos `alter table ... rename`, que reduce la
 ventana de inexistencia a milisegundos. No está implementado porque con
 identificadores separados el caso ya casi no aparece.
 
-## Los cuatro scripts de migración crean tablas temporales
+## Ningún script usa CTEs
 
-`07`, `08`, `09` y `10` no son un solo `CREATE TABLE AS`: parten el trabajo en
-tablas intermedias materializadas, con el prefijo `tmp_`.
+Cada paso intermedio es una **tabla física** con prefijo `tmp_`. No hay un solo
+`WITH` en toda la carpeta.
 
-```
-proceso.tmp_migracion_r1_origen_<id>       proceso.tmp_migracion_pd_r1_deciles_<id>
-proceso.tmp_migracion_r1_destino_<id>      proceso.tmp_migracion_pd_r1_base_<id>
-proceso.tmp_migracion_r1_base_<id>         proceso.tmp_migracion_pd_r1_par_<id>
-proceso.tmp_migracion_r1_par_<id>
-```
+**Por qué.** Impala no materializa los CTEs, los inlinea: encadenar varios en un
+mismo `CREATE TABLE AS` deja todos los intermedios en memoria dentro de un solo
+plan, y eso es lo que hacía cancelar las ETL de migración. Con tablas físicas
+cada paso va a disco. En la de PD había además un `ntile` cuyo CTE se
+referenciaba dos veces, así que el sort completo corría **dos veces**; ahora
+corre una.
 
-**Por qué.** Encadenado en CTEs, el ETL de migración se cancelaba por memoria:
-Impala no materializa los CTEs, así que el full outer join, el left join
-contra la base y la agregación final quedaban todos en el mismo plan con los
-intermedios en memoria. En la de PD había además un `ntile` que, por estar el
-CTE referenciado dos veces, corría el sort completo **dos veces**.
+### Cuántas sentencias tiene cada script
+
+Importa para leer el log de la página de Construcción:
+
+| script | sentencias | tmp_ |
+|---|---:|---:|
+| 01_largo_calificaciones | 11 | 2 |
+| 02_base_clientes | 3 | 0 |
+| 03_cobertura_producto | 3 | 0 |
+| 04_distribucion_grupo | 3 | 0 |
+| 05_pd_por_modelo | 23 | 5 |
+| 06_cortes_por_producto | 7 | 1 |
+| 07_migracion_r1 | 23 | 5 |
+| 08_migracion_r6 | 23 | 5 |
+| 09_migracion_pd_r1 | 31 | 7 |
+| 10_migracion_pd_r6 | 31 | 7 |
+| 11_puente_base | 11 | 2 |
+| **total** | **169** | **34** |
 
 **El `compute stats` de cada intermedia va antes del join que la usa.** No es
 higiene: es buena parte de la ganancia. Con estadísticas Impala conoce los

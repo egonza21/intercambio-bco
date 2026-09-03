@@ -160,18 +160,50 @@ compute stats proceso.<nombre>;
 join malos, y se nota en las tablas que se cruzan — la migración une
 `largo_calificaciones` contra sí misma y contra la base de clientes.
 
-Son tres sentencias, no una: si el cliente no acepta varias por llamada, hay
-que separarlas y ejecutarlas en secuencia.
+**Ningún script de construcción usa `WITH`.** Cada paso intermedio es una
+tabla física con prefijo `tmp_`, que se borra al final cuando la definitiva ya
+existe.
 
-**Los cuatro scripts de migración son la excepción**: crean tablas intermedias
-`tmp_*` porque encadenado en CTEs el ETL se cancelaba por memoria. Las borran
-al final, pero si el script se interrumpe quedan huérfanas; los `drop` del
-arranque las limpian en la corrida siguiente. Ver
-`sql/20_construccion/00_orden.md`.
+La razón es la que hacía cancelar las ETL pesadas: Impala no materializa los
+CTEs, los inlinea, así que encadenar varios en un mismo `CREATE TABLE AS` deja
+todos los intermedios en memoria dentro de un solo plan. Con tablas físicas
+cada paso va a disco, y el `compute stats` de cada una le da al planificador
+los tamaños reales **antes** del paso que la consume.
+
+El costo es que hay muchas más sentencias: la construcción completa son **169**
+repartidas en once scripts, de 3 en los más simples a 31 en los de migración de
+PD. El log de la página de Construcción las muestra por script, no por
+sentencia.
+
+Si un script se interrumpe quedan `tmp_` huérfanas; los `drop` del arranque las
+limpian en la corrida siguiente. Ver `sql/20_construccion/00_orden.md`.
 
 Los CTEs internos siguen existiendo dentro de cada `CREATE TABLE AS`: la regla
 de no usar subconsultas en el `FROM` se mantiene. Lo que cambia es que los
 pasos intermedios ahora pueden ser tablas físicas.
+
+### El filtro de ingestion_day
+
+**Toda lectura de `resultados_riesgos.maestro_calificaciones_pn` lleva
+`and c.ingestion_day >= 15`**, literal en la query y no parametrizado.
+
+**Hoy no descarta nada.** Los días de ingestión observados van de 19 a 24, así
+que el filtro no cambia ningún conteo. Está escrito precisamente por eso: es
+una salvaguarda contra el día en que llegue una carga parcial de principios de
+mes, y sin esta explicación alguien lo borra dentro de seis meses por parecer
+inútil.
+
+Qué pasaría sin él: una ingesta a medias de día 3 entraría como si fuera el mes
+completo, la base caería sin motivo y todos los agregados que dependen de ella
+—cobertura, migración, puente— reportarían un desplome que no existió.
+
+**La única excepción es `sql/00_perfilado/duplicados_ingestion_day.sql`**, y es
+deliberada: su trabajo es detectar ingestas anómalas, y filtrarlas la dejaría
+ciega justo para lo que existe.
+
+Si después de aplicar el filtro algún conteo cambia, significa que sí hay
+particiones con día menor a 15 que no se habían visto. Eso no es un problema
+del filtro: es el hallazgo.
 
 ### El identificador de versión, y qué problema resuelve
 
