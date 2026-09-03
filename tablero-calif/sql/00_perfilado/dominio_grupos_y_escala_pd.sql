@@ -7,7 +7,7 @@
 -- distintos: el primero por producto + grupo, el segundo solo por producto),
 -- así que se ejecutan por separado, no como una sola consulta.
 --
--- Usa el mismo mapeo idx -> producto de sql/_fragmentos/cte_productos.sql,
+-- Usa el mismo mapeo idx -> producto de sql/20_construccion/01_largo_calificaciones.sql,
 -- copiado aquí porque Impala no soporta includes entre archivos. Cualquier
 -- cambio en el mapeo canónico debe propagarse también a este archivo. El
 -- filtro de partición va antes del cross join para que Impala pode
@@ -25,7 +25,8 @@
 -- Resuelto 2026-08-25: el dominio NO es G1-G8 plano en todos los productos.
 -- sufi_moto, sufi_cpe y sufi_con abren G7 y G8 en G7_B/G7_M/G7_A y
 -- G8_B/G8_M/G8_A (severidad ascendente B < M < A); los demás productos sí
--- usan G1-G8 planos. Resuelto en sql/_fragmentos/cte_productos.sql con las
+-- usan G1-G8 planos. Resuelto en sql/20_construccion/01_largo_calificaciones.sql
+-- con las
 -- columnas grupo_base (apertura colapsada) y grupo_orden (severidad
 -- numérica). Esta query se conserva como verificación: si aparece un valor
 -- fuera de {G1..G8} y de las seis aperturas conocidas, hay que decidir
@@ -95,7 +96,8 @@ order by l.producto, l.grupo;
 -- modelos de escala distinta en un mismo eje.
 --
 -- **Esta query es el control de la lista manual de modelos de puntaje.**
--- sql/10_agregados/pd_por_modelo.sql clasifica la escala con un IN contra esa
+-- sql/20_construccion/05_pd_por_modelo.sql clasifica la escala con un IN
+-- contra esa
 -- lista, y nada en la tabla marca la escala de un modelo. Correr este bloque
 -- agrupando por modelo cuando cambie la vigencia de modelos: **si aparece un
 -- modelo con pd_max > 1 que no esté en la lista, hay que agregarlo ahí**. El

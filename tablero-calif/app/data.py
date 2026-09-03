@@ -1,9 +1,17 @@
-"""Carga de los agregados de sql/10_agregados/ y caché.
+"""Carga de datos y caché.
 
-El SQL NO se escribe acá: se lee de los .sql existentes. Esos archivos son la
-fuente de verdad y ya llevan documentado el porqué de cada decisión. Lo único
-que hace este módulo es sustituir los marcadores {DESDE}/{HASTA}/{REZAGO} por
-el formato de parámetros del helper y cachear el resultado.
+El SQL NO se escribe acá: se lee de los .sql del repo, que son la fuente de
+verdad y llevan documentado el porqué de cada decisión.
+
+Dos orígenes distintos:
+
+  sql/30_lectura/     SELECT sin filtros sobre las tablas ya construidas. Es
+                      de donde sale todo lo que muestra el tablero.
+  sql/00_perfilado/   consultas diagnósticas, que sí van directo contra la
+                      tabla fuente y sí llevan parámetros.
+
+Las tablas las construye sql/20_construccion/, que esta misma capa ejecuta
+desde la página de administración.
 """
 from __future__ import annotations
 
@@ -354,13 +362,14 @@ FAMILIA_PRODUCTO = {
 }
 
 # Modelos que devuelven puntaje 0-999. Espejo de la lista de
-# sql/10_agregados/pd_por_modelo.sql. Ver CLAUDE.md, "Modelos y su escala".
+# sql/20_construccion/05_pd_por_modelo.sql. Ver CLAUDE.md, "Modelos y su
+# escala".
 MODELOS_PUNTAJE = {"ADVANCE_1_1", "ADVANCE_INCLUSION"}
 
 # Los ocho modelos vigentes. Espejo de CLAUDE.md, "Modelos y su escala".
 # Un modelo fuera de esta lista no es un error: es una novedad que hay que
 # mirar, porque si viene en escala de puntaje hay que agregarlo a
-# MODELOS_PUNTAJE y a pd_por_modelo.sql o sus bins salen mal sin dar síntoma.
+# MODELOS_PUNTAJE y a 05_pd_por_modelo.sql o sus bins salen mal sin síntoma.
 MODELOS_CONOCIDOS = {
     "ADVANCE_1_1", "ADVANCE_INCLUSION", "T1_COMPORT", "T1_COMPORT_NEI",
     "T1_COMPORT_SOCIAL", "T2", "T3_MARCAS", "T_2_3",

@@ -10,9 +10,12 @@
 -- Lleva `grupo IS NOT NULL`, así que NO sirve para medir cobertura: esa
 -- necesita justamente las filas sin grupo y sale de la tabla ancha en 03.
 --
--- El mapeo idx -> columna es el de sql/_fragmentos/cte_productos.sql. Los tres
--- bloques `case p.idx` tienen que estar alineados con esa copia; es lo que
--- valida sql/00_perfilado/validacion_mapeo.sql.
+-- ESTE ARCHIVO ES LA FUENTE DE VERDAD DEL MAPEO idx -> columna. Antes lo era
+-- sql/_fragmentos/cte_productos.sql, un fragmento que se copiaba a mano y que
+-- ya no existe: sobrevivía como "copia canónica" de algo que en realidad se
+-- ejecuta acá. Las copias que hay que mantener alineadas con estos tres
+-- bloques `case p.idx` son las de sql/00_perfilado/, y lo que lo verifica es
+-- sql/00_perfilado/validacion_mapeo.sql.
 --
 -- ----------------------------------------------------------------------------
 -- SIN CTEs: cada paso intermedio es una tabla física

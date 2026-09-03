@@ -7,7 +7,7 @@
 -- Resuelto 2026-08-25: sí hubo un mes con `dias_distintos` > 1 (reproceso
 -- controlado, un ensayo). Fue un caso único, ya corregido a mano borrando la
 -- ingestión del ensayo de ese mes, y no se va a repetir. Por eso
--- sql/_fragmentos/cte_productos.sql NO deduplica con row_number(): asume una
+-- sql/20_construccion/01_largo_calificaciones.sql NO deduplica con row_number(): asume una
 -- sola fila por num_doc + tipo_doc + mes. Esta query se conserva como
 -- verificación puntual, por si hace falta reconfirmar el estado de la
 -- partición antes de correr los agregados.

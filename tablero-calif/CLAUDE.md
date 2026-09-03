@@ -109,6 +109,19 @@ Esto tiene una consecuencia directa sobre los visuales:
 
 ## Las dos capas
 
+> **`sql/10_agregados/` y `sql/_fragmentos/` ya no existen.** Eran la versión
+> anterior a partir el repo, sin el filtro de `ingestion_day` y sin las tablas
+> de `proceso`. Nadie las cargaba, pero convivir con dos versiones del mismo
+> agregado —una con filtro de día y otra sin— es la forma más fácil de que
+> alguien lea la equivocada. Están en el historial de git si hacen falta:
+> `git show 50e4a31:tablero-calif/sql/10_agregados/migracion.sql`.
+>
+> La **fuente de verdad del mapeo `idx → producto`** pasó a ser
+> `sql/20_construccion/01_largo_calificaciones.sql`. Antes lo era
+> `_fragmentos/cte_productos.sql`, un fragmento que se copiaba a mano y que en
+> realidad ya no se ejecutaba en ningún lado.
+
+
 El SQL tiene dos capas con **ciclos de vida distintos**, y confundirlas es el
 error a evitar:
 
@@ -327,8 +340,9 @@ ingestion_month   tinyint   Mes de ingestión y campo partición
 Este mapeo se repite en cada archivo que hace unpivot. **Es el punto más
 frágil del repo**: si un `CASE ... WHEN` queda desalineado, la query no falla,
 simplemente etiqueta mal los datos. La copia canónica vive en
-`sql/_fragmentos/cte_productos.sql` y cualquier cambio debe propagarse a todos
-los archivos que lo usen.
+`sql/20_construccion/01_largo_calificaciones.sql`, que es el único que
+CORRE y produce la tabla larga que lee todo lo demás. Cualquier cambio ahí
+debe propagarse a las copias de `sql/00_perfilado/`.
 
 | idx | producto        | familia_producto | columnas                                                  |
 |-----|-----------------|------------------|-----------------------------------------------------------|
@@ -394,7 +408,7 @@ G8_B -> 81   G8_M -> 82   G8_A -> 83
 Así `G1` (10) es el menor y `G8_A` (83) el mayor, y `G6` (60) < `G7_B` (71) <
 `G8_A` (83) aunque vengan de productos distintos. Se calcula por aritmética
 sobre el texto de `grupo`, no con un cuarto bloque de mapeo — ver la razón en
-`sql/_fragmentos/cte_productos.sql`.
+`sql/20_construccion/01_largo_calificaciones.sql`.
 
 `grupo_base` no necesita columna de orden: `G1`…`G8` ya ordenan igual
 alfabética que numéricamente.
@@ -496,7 +510,8 @@ replicada por familia.
 
 Solo los dos `ADVANCE_*` devuelven puntaje; los otros seis devuelven
 probabilidad. Esa clasificación vive en el `CASE` de `escala` en
-`sql/10_agregados/pd_por_modelo.sql` y **es un mapeo manual**: no hay nada en
+`sql/20_construccion/05_pd_por_modelo.sql` y **es un mapeo manual**: no hay
+nada en
 la tabla que marque la escala de un modelo, hay que saberlo y escribirlo.
 
 **Hay que actualizarla cuando entre un modelo nuevo en escala de puntaje.**
@@ -674,8 +689,6 @@ sql/
     02..10                   un archivo por tabla
   30_lectura/        SELECT sin filtros sobre esas tablas. Es lo único que
                      llama Streamlit
-  10_agregados/      HISTÓRICO: la versión parametrizada, de cuando no había
-                     escritura. Ya no la usa la app
     -- páginas funcionales (negocio)
     base_clientes.sql       clientes por mes y segmento (tabla ancha)
     cobertura_producto.sql  16 count(g_*), salida ancha, despivota en M
@@ -685,7 +698,6 @@ sql/
     pd_por_modelo.sql       histograma y PSI de las 2 PD, bins fijos
     migracion_pd.sql        matriz de deciles de PD, con {REZAGO}
     cortes_por_producto.sql fronteras de corte y detección de solapamiento
-  _fragmentos/       cte_productos.sql — copia canónica del mapeo
 powerbi/
   notas_modelo.md    esquema estrella, parámetros M, relaciones
 ```

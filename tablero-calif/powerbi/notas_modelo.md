@@ -53,7 +53,8 @@ Lo único que comparten es el slicer de fecha y `dim_fecha`.
 
 ## Reparto de responsabilidades: SQL vs. Power Query
 
-Los agregados de `sql/10_agregados/` son **hechos**: traen las llaves del
+Los agregados que construye `sql/20_construccion/` son **hechos**: traen las
+llaves del
 grano y las métricas, nada más. Todo lo que sea atributo derivado de una
 llave (etiquetas, agrupaciones, órdenes) se resuelve en dimensiones armadas
 en Power Query.
@@ -188,7 +189,8 @@ ensuciar el dominio de `grupo_base`.
 ### Cuidado: `grupo_orden` queda definido en dos lados
 
 La escala está tanto en esta dim_grupo como en el cálculo aritmético de
-`sql/_fragmentos/cte_productos.sql`. Son dos copias de la misma decisión: si
+`sql/20_construccion/01_largo_calificaciones.sql`. Son dos copias de la
+misma decisión: si
 aparece un valor de grupo nuevo, o cambia la convención B/M/A, hay que tocar
 las dos.
 

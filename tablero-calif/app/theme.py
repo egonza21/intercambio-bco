@@ -29,8 +29,9 @@ FONT = 'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif'
 # ---------------------------------------------------------------------------
 # grupo_orden NO viaja en los agregados a propósito (es presentacional, ver
 # powerbi/notas_modelo.md). La app lo reconstruye acá con la MISMA aritmética
-# que sql/_fragmentos/cte_productos.sql: decena = dígito del grupo, unidad =
-# apertura (B=1, M=2, A=3). Si cambia la convención, cambia en los dos lados.
+# que sql/20_construccion/01_largo_calificaciones.sql, que es la fuente de
+# verdad del mapeo: decena = dígito del grupo, unidad = apertura (B=1, M=2,
+# A=3). Si cambia la convención, cambia en los dos lados.
 DIM_GRUPO: list[tuple[str, str, int]] = [
     ("G1", "G1", 10), ("G2", "G2", 20), ("G3", "G3", 30), ("G4", "G4", 40),
     ("G5", "G5", 50), ("G6", "G6", 60),

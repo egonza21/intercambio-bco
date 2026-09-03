@@ -23,9 +23,12 @@ for f in sql/20_construccion/*.sql; do
 done
 ```
 
-Cada script son **tres sentencias** (`drop`, `create table as`,
-`compute stats`). Si el cliente no acepta varias por llamada, hay que
-separarlas por `;` y ejecutarlas en secuencia — `impala-shell -f` lo hace solo.
+**Ningún script usa CTEs**: cada paso intermedio es una tabla física con
+prefijo `tmp_`, que se borra al final. Eso multiplica las sentencias — la
+construcción completa son **169** repartidas en once scripts, de 3 en los más
+simples a 31 en los de migración de PD. Si el cliente no acepta varias por
+llamada hay que separarlas por `;` y ejecutarlas en secuencia; `impala-shell -f`
+lo hace solo. El detalle por script está en `00_orden.md`.
 
 `01_largo_calificaciones` tiene que existir antes que los cuatro scripts que
 leen de ella. El detalle de dependencias está en
@@ -70,7 +73,7 @@ y en ningún otro lado:
 ```python
 DSN = "impala-virtual-prd"
 USUARIO = "efgon"
-FORMATO_PARAMETRO = "%({nombre})s"   # cambiar si el helper usa otro estilo
+FORMATO_PARAMETRO = "{{{nombre}}}"   # cambiar si el helper usa otro estilo
 ```
 
 Los agregados se cachean una hora (`@st.cache_data`). Para forzar una
@@ -139,8 +142,11 @@ mes se calculan como `year * 12 + month` y se fuerzan a `int` antes de
 formatearlos, así un selector no puede meter texto arbitrario en la consulta.
 El porqué del `12` y no `100` está en `CLAUDE.md`.
 
-`sql/10_agregados/` queda como histórico: es la versión parametrizada de
-cuando no había permisos de escritura. La app ya no la usa.
+La fuente de verdad del mapeo `idx → producto` es
+`sql/20_construccion/01_largo_calificaciones.sql`: es el único que corre y
+produce la tabla larga que lee todo lo demás. Las copias de
+`sql/00_perfilado/` tienen que mantenerse alineadas con él, y
+`validacion_mapeo.sql` es lo que lo verifica.
 
 ### Decisiones de color
 
@@ -172,7 +178,7 @@ superficie). Las cifras de cada check están anotadas en `theme.py`.
 
 En `theme.DIM_GRUPO`. No viaja en los agregados a propósito: es presentacional
 (ver `powerbi/notas_modelo.md`). La app lo reconstruye con **la misma
-aritmética** que `sql/_fragmentos/cte_productos.sql`. Si cambia la convención
+aritmética** que `sql/20_construccion/01_largo_calificaciones.sql`. Si cambia la convención
 de nombres de grupo, hay que tocar los dos lados.
 
 ## Qué mira cada página
@@ -225,7 +231,7 @@ porque los cortes sí son por producto.
 
 ## Estado
 
-Las consultas de `sql/10_agregados/` **todavía no se corrieron en Impala**. Lo
+Las consultas de `sql/20_construccion/` **todavía no se corrieron en Impala**. Lo
 verificado hasta acá es consistencia estructural (mapeo alineado, aritmética de
 meses, cobertura de columnas) y que las figuras se construyen y serializan con
 datos sintéticos. Falta la primera corrida real.

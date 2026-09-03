@@ -15,7 +15,7 @@
 -- Se conserva como verificación: si al reejecutarla alguno de esos conteos
 -- deja de ser 0, el filtro de nulos del tablero necesita revisión.
 --
--- Usa el mismo mapeo idx -> producto de sql/_fragmentos/cte_productos.sql,
+-- Usa el mismo mapeo idx -> producto de sql/20_construccion/01_largo_calificaciones.sql,
 -- copiado aquí porque Impala no soporta includes entre archivos. Cualquier
 -- cambio en el mapeo canónico debe propagarse también a este archivo. El
 -- filtro de partición va antes del cross join para que Impala pode
