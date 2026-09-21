@@ -92,9 +92,14 @@ base_mes = base_f[base_f["idx_mes"] == mes]
 cob_mes = cob_f[cob_f["idx_mes"] == mes]
 
 # --- KPIs ------------------------------------------------------------------
+# Contra qué mes se compara sale de los meses que EXISTEN, no de `mes - 1`. El
+# filtro no puede decidirlo: que falte una partición es un hecho del dato.
+mes_ant, dist_meses = charts.mes_comparacion(base["idx_mes"], mes)
+etq_ant = theme.etiqueta_mes_idx(mes_ant) if mes_ant is not None else None
+
 clientes = base_mes["clientes"].sum() if not base_mes.empty else None
-prev = (base_f[base_f["idx_mes"] == mes - 1]["clientes"].sum()
-        if not base_f.empty else 0)
+prev = (base_f[base_f["idx_mes"] == mes_ant]["clientes"].sum()
+        if (mes_ant is not None and not base_f.empty) else 0)
 delta = (clientes / prev - 1) if (clientes and prev) else None
 
 # Un KPI que dice "7.043 clientes" sin decir de qué es una cifra huérfana en
@@ -137,7 +142,8 @@ def banda(df_mes, desde_orden: int, hasta_orden: int, producto: str):
 
 
 # Filtrado también: si no, la variación compara manzanas con peras.
-dist_prev = dist_f[dist_f["idx_mes"] == mes - 1]
+dist_prev = (dist_f[dist_f["idx_mes"] == mes_ant] if mes_ant is not None
+             else dist_f.iloc[0:0])
 # La banda se mide sobre el producto elegido; sin filtro, consumo.
 _prod_kpi = producto if producto != "todos" else "consumo"
 BANDAS = [
@@ -147,10 +153,32 @@ BANDAS = [
                       "(G7_B/M/A y G8_B/M/A), agregadas por grupo base."),
 ]
 
+# Todos los deltas de esta fila comparan los mismos dos meses; se dice una
+# vez, acá, en vez de dejar que cada flechita signifique "contra algo".
+if mes_ant is None:
+    st.warning(
+        f"**{theme.etiqueta_mes_idx(mes)} es el primer mes disponible**: no "
+        f"hay mes anterior contra el cual comparar, así que los KPIs van sin "
+        f"variación.")
+elif dist_meses > 1:
+    st.warning(
+        f"**Falta la partición del mes inmediatamente anterior a "
+        f"{theme.etiqueta_mes_idx(mes)}.** Las variaciones de abajo comparan "
+        f"contra **{etq_ant}**, a **{dist_meses} meses**: no son variaciones "
+        f"mensuales.")
+else:
+    st.markdown(
+        f'<p class="nota">Las variaciones comparan '
+        f'<b>{theme.etiqueta_mes_idx(mes)}</b> contra <b>{etq_ant}</b>.</p>',
+        unsafe_allow_html=True)
+
+_contra = f" contra {etq_ant}" if etq_ant else " contra el mes anterior"
 cols = st.columns([1.25, 1, 1, 1, 0.9])
-cols[0].metric("Clientes en la base", theme.fmt_miles(clientes),
+cols[0].metric(f"Clientes en la base · {theme.etiqueta_mes_idx(mes)}",
+               theme.fmt_miles(clientes),
                delta=(theme.fmt_pct(delta) if delta is not None else None),
-               help="Base del mes sobre la tabla ancha, no la larga.")
+               help=f"Base del mes sobre la tabla ancha, no la larga. La "
+                    f"variación es{_contra}.")
 for col, (nombre, lo, hi, ayuda) in zip(cols[1:4], BANDAS):
     act = banda(dist_mes, lo, hi, _prod_kpi)
     ant = banda(dist_prev, lo, hi, _prod_kpi)
@@ -160,8 +188,8 @@ for col, (nombre, lo, hi, ayuda) in zip(cols[1:4], BANDAS):
                delta=(f"{var * 100:+.1f} pp".replace(".", ",")
                       if var is not None else None),
                delta_color="inverse" if nombre != "G1–G4" else "normal",
-               help=ayuda + " La variación es en puntos porcentuales contra el "
-                            "mes anterior.")
+               help=ayuda + " La variación es en puntos porcentuales"
+                            + _contra + ".")
 cols[4].metric("Segmentos",
                theme.fmt_miles(base_mes["segmento"].nunique())
                if not base_mes.empty else "--")

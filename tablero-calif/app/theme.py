@@ -201,7 +201,24 @@ SEGMENTOS_APARTE = [c for c, (_, o) in SEGMENTOS.items() if o is None]
 
 
 def _cod(codigo) -> str:
-    return "" if codigo is None else str(codigo).strip()
+    """Código de segmento normalizado a string. El código es la IDENTIDAD.
+
+    El caso que rompía: si la columna llega numérica desde Impala, str(4.0) da
+    '4.0', que no está en SEGMENTOS, así que etiqueta_segmento devolvía el
+    código crudo como nombre. Dos códigos podían terminar con la misma
+    etiqueta y Plotly los colapsaba en una sola fila del heatmap. Un float
+    entero se convierte sin decimal.
+
+    La normalización de verdad ocurre UNA vez, al leer, en data._con_segmento().
+    Esto es la red de seguridad para lo que se le escape.
+    """
+    if codigo is None:
+        return ""
+    if isinstance(codigo, float):
+        if codigo != codigo:            # NaN
+            return ""
+        return str(int(codigo)) if codigo.is_integer() else str(codigo)
+    return str(codigo).strip()
 
 
 def etiqueta_segmento(codigo) -> str:
@@ -243,7 +260,26 @@ def segmentos_ordenados(valores) -> list[str]:
 
 
 def etiquetas_segmento(codigos) -> list[str]:
-    return [etiqueta_segmento(c) for c in codigos]
+    """Nombres legibles, con guarda de unicidad.
+
+    El nombre es PRESENTACIÓN, nunca identidad: los ejes se construyen sobre
+    códigos. Pero si un eje usa estas etiquetas como tickvals y dos códigos
+    producen la misma, Plotly colapsa las dos categorías en una y muestra el
+    valor de un segmento bajo el nombre de otro, sin error y sin síntoma.
+
+    Mejor reventar acá con el par de códigos culpables que renderizar mal en
+    silencio.
+    """
+    codigos = list(codigos)
+    nombres = [etiqueta_segmento(c) for c in codigos]
+    if len(set(nombres)) != len(nombres):
+        pares = {n: [c for c, x in zip(codigos, nombres) if x == n]
+                 for n in nombres if nombres.count(n) > 1}
+        raise ValueError(
+            f"Dos códigos de segmento producen la misma etiqueta: {pares}. "
+            f"Revisar theme.SEGMENTOS: o hay un nombre repetido, o un código "
+            f"no está mapeado y cae a su valor crudo.")
+    return nombres
 
 
 # ---------------------------------------------------------------------------

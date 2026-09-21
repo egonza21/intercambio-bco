@@ -252,30 +252,57 @@ def construir(desde: int, hasta: int, mes: int, rezago: int) -> str:
     # Va antes que todo: quien abre el reporte tiene que saber dónde mirar
     # antes de mirar. Sin ventana: el baseline necesita toda la historia.
     cob_full = data.cobertura_producto()
+    ref = charts.ranking_anomalias(cob_full, mes, "cantidad", 15)
+    contra = (f"{ref.mes} contra {ref.base}" if ref.idx_base is not None
+              else f"{ref.mes}, sin mes anterior con el cual comparar")
     doc.seccion("anomalias", "Qué se movió este mes",
                 f"Celdas segmento × producto ordenadas por cuánto se salieron "
-                f"de su propia historia, en {theme.etiqueta_mes_idx(mes)} "
-                f"contra {theme.etiqueta_mes_idx(mes - 1)}. Es un ranking, no "
-                f"una alarma: siempre muestra sus primeras filas. El baseline "
-                f"usa mediana y MAD, no promedio y desvío, porque los "
-                f"incidentes pasados están dentro de la historia y con "
-                f"promedio inflarían su propia variabilidad.")
-    for metrica, titulo in (("cantidad", "Por clientes calificados"),
-                            ("cobertura", "Por cobertura (% de la base)")):
-        rk, sb = charts.ranking_anomalias(cob_full, mes, metrica, 15)
-        doc.sub(titulo)
-        if rk.empty:
-            doc.nota("Ninguna celda con historia suficiente superó el piso de "
-                     "variación este mes.")
-        else:
-            vis = rk.drop(columns=["serie", "_cod_seg"]).copy()
-            vis["var_rel"] = vis["var_rel"].map(lambda v: f"{v * 100:+.1f}%")
-            vis["puntaje"] = vis["puntaje"].map(lambda v: f"{v:.1f}")
-            doc.tabla(vis, maximo=15)
-        if not sb.empty:
-            doc.nota(f"{len(sb)} celdas quedaron fuera del ranking por tener "
-                     f"menos de {charts.MESES_MINIMOS} meses de historia.")
-    doc.sub("La matriz completa · variación contra el mes anterior")
+                f"de su propia historia, en {contra}. Es un ranking, no una "
+                f"alarma: siempre muestra sus primeras filas. El baseline usa "
+                f"mediana y MAD sobre variaciones entre meses consecutivos, "
+                f"no promedio y desvío, porque los incidentes pasados están "
+                f"dentro de la historia y con promedio inflarían su propia "
+                f"variabilidad.")
+    if ref.idx_base is None:
+        doc.nota(f"No hay ningún mes anterior a {ref.mes} en los datos: el "
+                 f"ranking mide variación mes a mes y sin mes previo no "
+                 f"existe.")
+    else:
+        if ref.hay_hueco:
+            doc.nota(f"Falta la partición del mes inmediatamente anterior a "
+                     f"{ref.mes}. La comparación va contra {ref.base}, a "
+                     f"{ref.distancia} meses, mientras que el baseline se arma "
+                     f"con variaciones de un mes: los puntajes están "
+                     f"sobreestimados y sirven para ordenar, no como magnitud.")
+        for metrica, titulo in (("cantidad", "Por clientes calificados"),
+                                ("cobertura", "Por cobertura (% de la base)")):
+            an = (ref if metrica == "cantidad"
+                  else charts.ranking_anomalias(cob_full, mes, metrica, 15))
+            doc.sub(titulo)
+            if an.ranking.empty:
+                doc.nota("Ninguna celda con historia suficiente superó el "
+                         "piso de variación este mes.")
+            else:
+                vis = an.ranking.drop(columns=["serie", "_cod_seg"]).copy()
+                vis["var_rel"] = vis["var_rel"].map(lambda v: f"{v * 100:+.1f}%")
+                vis["puntaje"] = vis["puntaje"].map(lambda v: f"{v:.1f}")
+                doc.tabla(vis, maximo=15)
+            if not an.sin_variabilidad.empty:
+                doc.sub(f"{titulo} · sin variabilidad histórica")
+                doc.nota("Se movieron, pero su variación entre meses "
+                         "consecutivos había sido siempre la misma (MAD nula). "
+                         "Van aparte y sin puntaje: dividir por una dispersión "
+                         "de cero no da un número, y como centinela "
+                         "encabezaría el ranking siempre.")
+                vis = an.sin_variabilidad.drop(
+                    columns=["serie", "_cod_seg"]).copy()
+                vis["var_rel"] = vis["var_rel"].map(lambda v: f"{v * 100:+.1f}%")
+                doc.tabla(vis, maximo=15)
+            if not an.sin_baseline.empty:
+                doc.nota(f"{len(an.sin_baseline)} celdas quedaron fuera del "
+                         f"ranking por tener menos de {charts.MESES_MINIMOS} "
+                         f"meses de historia entre meses consecutivos.")
+    doc.sub("La matriz completa · variación mes contra mes")
     doc.figura(charts.matriz_segmento_producto(cob_full, mes, "variacion"))
     doc.cierra()
 

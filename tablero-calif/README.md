@@ -110,19 +110,47 @@ consultas.
 
 ```
 app/
-  main.py     configura la página, inyecta el CSS y arma la navegación
-  data.py     lee los .sql, sustituye parámetros, llama al helper y cachea
-  theme.py    paleta, dimensión de grupo, template de Plotly y CSS
-  charts.py   construye las figuras. NO renderiza ninguna
-  export.py   arma el HTML estático con esas mismas figuras
-  pages/      una por página del tablero
+  main.py            configura la página, inyecta el CSS y arma la navegación
+  data.py            lee los .sql, llama al helper y cachea
+  theme.py           paleta, dimensión de grupo, template de Plotly y CSS
+  charts.py          fachada: reexporta las figuras de los módulos de abajo
+  charts_base.py     helpers compartidos (_sin_datos, _t, contra qué mes)
+  charts_panorama.py Panorama del mes y Evolución
+  charts_anomalias.py ranking, matriz segmento × producto y puente de la base
+  charts_migracion.py migración de grupo, de PD y de modelo
+  charts_modelos.py  histograma de PD, PSI y cortes
+  charts_salud.py    los cuatro chequeos de salud del dato
+  export.py          arma el HTML estático con esas mismas figuras
+  pages/             una por página del tablero
 ```
 
-La regla que sostiene el diseño: **`charts.py` devuelve figuras y no las
-pinta.** `main.py` las pasa a `st.plotly_chart`; `export.py` las pasa a
+Las figuras están partidas **por página**, que es como se piensa el tablero.
+`charts.py` quedó como fachada para que `import charts` siga funcionando: la
+división es del código, no de la interfaz.
+
+La regla que sostiene el diseño: **los módulos de figuras devuelven figuras y
+no las pintan.** `main.py` las pasa a `st.plotly_chart`; `export.py` las pasa a
 `write_html`. Una sola definición por figura, dos salidas. Si el HTML se ve
-distinto de la app, es un bug de `charts.py`, no de dos implementaciones que se
+distinto de la app, es un bug de la función, no de dos implementaciones que se
 separaron.
+
+### Dos invariantes que no son opcionales
+
+**El código de segmento es la identidad; el nombre es presentación.** Los ejes
+y los índices se construyen siempre sobre `segmento` (el código), y el nombre
+legible entra solo por `tickvals`/`ticktext` o como `name` de una serie. Los
+nombres pueden repetirse — un código sin mapear cae a su valor crudo — y
+Plotly colapsa dos categorías con la misma etiqueta en una sola, mostrando el
+valor de un segmento bajo el nombre de otro sin dar error. `data._con_segmento`
+normaliza la columna a string una sola vez, al leer; `theme.etiquetas_segmento`
+revienta si dos códigos producen la misma etiqueta.
+
+**Ningún visual que compare contra otro mes deja implícito contra cuál.**
+`charts_base.mes_comparacion` resuelve el mes de comparación a partir de los
+meses que existen, no de `idx_mes - 1`, y devuelve también la distancia. Si
+falta la partición del mes anterior, el visual lo dice y aclara contra qué mes
+terminó comparando y a cuántos meses. En las tablas, las columnas se llaman
+con el mes ("jul 2026", "ago 2026"), nunca "anterior"/"actual".
 
 ### Dos capas de SQL
 

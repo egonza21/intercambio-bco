@@ -189,7 +189,7 @@ def _tabla_cacheada(nombre: str, idu: str) -> pd.DataFrame:
     mover un selector del sidebar no vuelve a consultar."""
     ruta = DIR_LECTURA / f"{nombre}.sql"
     sql = _resolver_idunico(ruta.read_text(encoding="utf-8"), idu)
-    return _con_mes(_ejecutar(sql, {}))
+    return _con_segmento(_con_mes(_ejecutar(sql, {})))
 
 
 def _tabla(nombre: str) -> pd.DataFrame:
@@ -253,14 +253,29 @@ def distribucion_grupo() -> pd.DataFrame:
     return _con_grupo(_tabla("distribucion_grupo"))
 
 
+def _con_rezago(df: pd.DataFrame, rezago: int) -> pd.DataFrame:
+    """Deja el rezago DENTRO de los datos.
+
+    El rezago vive en el nombre de la tabla, así que los visuales no tenían
+    forma de saber contra qué mes está comparado lo que reciben y hablaban de
+    "el mes anterior" a ciegas: cierto con rezago 1, falso con rezago 6.
+    Viajando como columna no puede desfasarse de la tabla que se leyó.
+    """
+    if df.empty:
+        return df
+    df = df.copy()
+    df["rezago"] = int(rezago)
+    return df
+
+
 def migracion(rezago: int) -> pd.DataFrame:
     """El rezago NO es un parámetro de la consulta: son dos tablas distintas,
     migracion_r1 y migracion_r6. Ver sql/20_construccion/00_orden.md."""
-    return _tabla(f"migracion_r{int(rezago)}")
+    return _con_rezago(_tabla(f"migracion_r{int(rezago)}"), rezago)
 
 
 def migracion_pd(rezago: int) -> pd.DataFrame:
-    return _tabla(f"migracion_pd_r{int(rezago)}")
+    return _con_rezago(_tabla(f"migracion_pd_r{int(rezago)}"), rezago)
 
 
 def pd_por_modelo() -> pd.DataFrame:
@@ -328,6 +343,30 @@ def _con_mes(df: pd.DataFrame) -> pd.DataFrame:
     df["idx_mes"] = df["ingestion_year"].astype(int) * 12 + df["ingestion_month"].astype(int)
     df["mes"] = [theme.etiqueta_mes(a, m)
                  for a, m in zip(df["ingestion_year"], df["ingestion_month"])]
+    return df
+
+
+def _con_segmento(df: pd.DataFrame) -> pd.DataFrame:
+    """Normaliza a string TODA columna de segmento, una sola vez y acá.
+
+    Antes cada función hacía su propio .map(theme._cod), y las que se
+    olvidaban trabajaban con el valor crudo. Si la columna llega numérica
+    desde Impala, 4.0 no es '4' y deja de encontrar su nombre en SEGMENTOS:
+    el código cae a su propio valor como etiqueta y dos segmentos pueden
+    terminar con el mismo nombre en un eje.
+
+    Cubre `segmento` y también `segmento_anterior` / `segmento_actual` de la
+    migración, que es donde el olvido era más fácil.
+    """
+    if df.empty:
+        return df
+    cols = [c for c in df.columns
+            if c == "segmento" or c.startswith("segmento_")]
+    if not cols:
+        return df
+    df = df.copy()
+    for c in cols:
+        df[c] = df[c].map(theme._cod)
     return df
 
 
