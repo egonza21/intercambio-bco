@@ -34,25 +34,44 @@ drop table if exists proceso.tmp_productos_{IDUNICO} purge;
 drop table if exists proceso.tmp_largo_raw_{IDUNICO} purge;
 
 -- --- 1. el mapeo idx -> producto, como tabla de 16 filas ---------------------
+-- DOS agrupaciones, y no son la misma cosa:
+--
+--   familia_producto  PRESENTACIÓN. Cómo se agrupan los productos en el
+--                     tablero para el drill down. Sus valores son una
+--                     propuesta todavía sin confirmar contra la clasificación
+--                     oficial del banco (CLAUDE.md, pendiente 6), así que
+--                     pueden cambiar porque alguien decida reagrupar.
+--
+--   serie_pd          REGLA DE NEGOCIO. Qué productos comparten PD y modelo.
+--                     Son dos series y solo dos: los cuatro de vivienda
+--                     (hip_vis, hip_novis, lea_hab_vis, lea_hab_novis) por un
+--                     lado y los doce restantes por el otro. Ver CLAUDE.md,
+--                     "La PD no es por producto".
+--
+-- Hoy coinciden en qué productos son 'vivienda', y por eso es tentador usar
+-- familia_producto para decidir la serie. NO HACERLO: si alguien reagrupa las
+-- familias para el tablero, la lógica de PD y de modelo cambiaría en silencio
+-- y sin error. Lo que decide la serie es serie_pd.
 create table proceso.tmp_productos_{IDUNICO}
 stored as parquet
 as
-              select 1  as idx, 'consumo' as producto, 'consumo' as familia_producto
-    union all select 2,  'tdc',           'consumo'
-    union all select 3,  'libranza',      'consumo'
-    union all select 4,  'rotativo',      'consumo'
-    union all select 5,  'hip_vis',       'vivienda'
-    union all select 6,  'hip_novis',     'vivienda'
-    union all select 7,  'lea_hab_vis',   'vivienda'
-    union all select 8,  'lea_hab_novis', 'vivienda'
-    union all select 9,  'comercial',     'comercial'
-    union all select 10, 'micro',         'comercial'
-    union all select 11, 'sobregiro',     'comercial'
-    union all select 12, 'sufi_veh',      'sufi'
-    union all select 13, 'sufi_moto',     'sufi'
-    union all select 14, 'sufi_cpe',      'sufi'
-    union all select 15, 'sufi_con',      'sufi'
-    union all select 16, 'calm',          'consumo';
+              select 1  as idx, 'consumo' as producto,
+                     'consumo' as familia_producto, 'general' as serie_pd
+    union all select 2,  'tdc',          'consumo',  'general'
+    union all select 3,  'libranza',     'consumo',  'general'
+    union all select 4,  'rotativo',     'consumo',  'general'
+    union all select 5,  'hip_vis',      'vivienda', 'vivienda'
+    union all select 6,  'hip_novis',    'vivienda', 'vivienda'
+    union all select 7,  'lea_hab_vis',  'vivienda', 'vivienda'
+    union all select 8,  'lea_hab_novis','vivienda', 'vivienda'
+    union all select 9,  'comercial',    'comercial','general'
+    union all select 10, 'micro',        'comercial','general'
+    union all select 11, 'sobregiro',    'comercial','general'
+    union all select 12, 'sufi_veh',     'sufi',     'general'
+    union all select 13, 'sufi_moto',    'sufi',     'general'
+    union all select 14, 'sufi_cpe',     'sufi',     'general'
+    union all select 15, 'sufi_con',     'sufi',     'general'
+    union all select 16, 'calm',         'consumo',  'general';
 
 compute stats proceso.tmp_productos_{IDUNICO};
 
@@ -68,6 +87,7 @@ select
     c.segmento,
     p.producto,
     p.familia_producto,
+    p.serie_pd,
     case p.idx
       when  1 then c.pd_consumo        when  2 then c.pd_tdc
       when  3 then c.pd_libranza       when  4 then c.pd_rota
@@ -124,6 +144,7 @@ select
   r.segmento,
   r.producto,
   r.familia_producto,
+  r.serie_pd,
   r.pd,
   r.grupo,
   regexp_replace(r.grupo, '_[BMA]$', '') as grupo_base,

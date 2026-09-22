@@ -298,12 +298,3 @@ def discordancia_pd_grupo(df: pd.DataFrame) -> go.Figure:
                      tickformat=",.0f", rangemode="tozero")
     return _t(fig, unified=True)
 
-
-_FAM = {
-    "consumo": "consumo", "tdc": "consumo", "libranza": "consumo",
-    "rotativo": "consumo", "calm": "consumo",
-    "hip_vis": "vivienda", "hip_novis": "vivienda",
-    "lea_hab_vis": "vivienda", "lea_hab_novis": "vivienda",
-    "comercial": "comercial", "micro": "comercial", "sobregiro": "comercial",
-    "sufi_veh": "sufi", "sufi_moto": "sufi", "sufi_cpe": "sufi", "sufi_con": "sufi",
-}

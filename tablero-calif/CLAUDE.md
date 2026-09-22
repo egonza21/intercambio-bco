@@ -368,6 +368,33 @@ de producto. Confirmar contra la clasificación que use el banco.** El nombre
 de la columna se eligió para que no se confunda con `producto`, que es el
 detalle individual.
 
+### `familia_producto` y `serie_pd` no son la misma columna
+
+La tabla de productos lleva **dos** agrupaciones, y confundirlas es un error
+silencioso:
+
+| columna | qué es | puede cambiar |
+|---|---|---|
+| `familia_producto` | **Presentación.** Cómo se agrupan los productos en el tablero para el drill down. 4 valores. | Sí: es una propuesta sin confirmar (pendiente 6) y alguien puede reagrupar |
+| `serie_pd` | **Regla de negocio.** Qué productos comparten PD y modelo. 2 valores: `general` y `vivienda`. | No sin que cambie la tabla fuente |
+
+Hoy coinciden en qué productos son de vivienda, y por eso es tentador decidir
+la serie con `familia_producto = 'vivienda'`. **No hacerlo.** Si alguien
+reagrupa las familias para el tablero —que es su propósito y está previsto—,
+toda la lógica que dependa de PD o de modelo cambiaría sin dar error.
+
+`serie_pd` es lo que decide:
+
+- qué columna de modelo mira `07_migracion_r1` / `08_migracion_r6` para
+  separar `perdida_por_corte` de `perdida_de_modelo`;
+- cualquier cosa futura que distinga las dos PD a partir del producto.
+
+`05_pd_por_modelo`, `09_migracion_pd_r1` y `10_migracion_pd_r6` **no** usan
+ninguna de las dos: leen la tabla ancha, donde no hay columna de producto, y
+arman las dos series con listas explícitas de columnas `pd_*` / `modelo_*`.
+Eso también expresa la regla de negocio directamente, así que está bien; lo
+que hay que sostener es que esas listas y `serie_pd` digan lo mismo.
+
 Las dos columnas conviven y forman una jerarquía en el tablero:
 `familia_producto` (4 valores) arriba, `producto` (16 valores) abajo. Un mismo
 visual arranca con cuatro barras y hace drill down al detalle, sin duplicar

@@ -59,7 +59,7 @@ stored as parquet
 as
 select
     l.num_doc, l.tipo_doc, l.segmento, l.producto,
-    l.familia_producto, l.idx_mes, l.grupo_base, l.modelo
+    l.serie_pd, l.idx_mes, l.grupo_base, l.modelo
   from proceso.largo_calificaciones_{IDUNICO} l;
 
 compute stats proceso.tmp_migracion_r6_destino_{IDUNICO};
@@ -70,7 +70,7 @@ stored as parquet
 as
 select
     l.num_doc, l.tipo_doc, l.segmento, l.producto,
-    l.familia_producto, l.modelo,
+    l.serie_pd, l.modelo,
     l.idx_mes + 6 as idx_mes_destino,
     l.grupo_base
   from proceso.largo_calificaciones_{IDUNICO} l;
@@ -94,6 +94,11 @@ select
     -- Son DOS columnas y no una porque el modelo, como la PD, se replica por
     -- cliente dentro de cada serie: una para los 12 productos no-vivienda y
     -- otra para los 4 de vivienda. Ver CLAUDE.md, "La PD no es por producto".
+    --
+    -- Cuál de las dos le toca a cada producto lo dice `serie_pd`, que viene de
+    -- la tabla de productos de 01_largo_calificaciones. NO `familia_producto`:
+    -- esa es de presentación y puede reagruparse para el tablero, lo que
+    -- cambiaría esta categorización sin que nada lo detecte.
     case when coalesce(
             nullif(trim(c.modelo_consumo), ''),
             nullif(trim(c.modelo_tdc), ''),
@@ -132,8 +137,7 @@ select
   coalesce(d.num_doc,  o.num_doc)          as num_doc,
   coalesce(d.tipo_doc, o.tipo_doc)         as tipo_doc,
   coalesce(d.producto, o.producto)         as producto,
-  coalesce(d.familia_producto,
-           o.familia_producto)             as familia_producto,
+  coalesce(d.serie_pd, o.serie_pd)         as serie_pd,
   o.segmento                               as segmento_anterior,
   d.segmento                               as segmento_actual,
   coalesce(d.idx_mes,  o.idx_mes_destino)  as idx_mes_destino,
@@ -160,7 +164,7 @@ stored as parquet
 as
 select
   p.producto,
-  p.familia_producto,
+  p.serie_pd,
   p.segmento_anterior,
   p.segmento_actual,
   p.idx_mes_destino,
@@ -178,13 +182,13 @@ select
     when p.grupo_base_origen is null
      and b.num_doc is null                      then 'entrada'
     when p.grupo_base_origen is null
-     and case when p.familia_producto = 'vivienda'
+     and case when p.serie_pd = 'vivienda'
                      then b.tiene_modelo_vivienda
                      else b.tiene_modelo_general end
                                                 then 'ganancia_por_corte'
     when p.grupo_base_origen is null            then 'ganancia_de_modelo'
     when b.num_doc is null                      then 'salida'
-    when case when p.familia_producto = 'vivienda'
+    when case when p.serie_pd = 'vivienda'
                      then b.tiene_modelo_vivienda
                      else b.tiene_modelo_general end
                                                 then 'perdida_por_corte'
