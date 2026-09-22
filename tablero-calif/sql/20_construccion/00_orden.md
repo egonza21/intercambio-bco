@@ -14,8 +14,8 @@ orden, o en paralelo si el clúster lo aguanta.
    │
    ├── 04_distribucion_grupo
    ├── 06_cortes_por_producto
-   ├── 07_migracion_r1
-   └── 08_migracion_r6
+   ├── 07_migracion_r1          ← ADEMÁS lee la tabla ancha (ver abajo)
+   └── 08_migracion_r6          ← ADEMÁS lee la tabla ancha (ver abajo)
 
 11_puente_base                   ← usa una tmp propia, tmp_puente_mes
 02_base_clientes                 ┐
@@ -24,6 +24,15 @@ orden, o en paralelo si el clúster lo aguanta.
 09_migracion_pd_r1               │
 10_migracion_pd_r6               ┘
 ```
+
+`07` y `08` dependen de `largo_calificaciones` para los dos lados del join,
+pero su paso 3 (`tmp_migracion_*_base`) lee **también la tabla ancha**. No es
+redundancia: la larga lleva `grupo IS NOT NULL`, así que un cliente que perdió
+el grupo no tiene fila ahí. La ancha aporta dos cosas que la larga no puede
+dar — si el cliente sigue en la tabla ese mes (separa *salida* de *pérdida de
+elegibilidad*) y si tiene modelo ese mes (separa *perdida_por_corte* de
+*perdida_de_modelo*). Ver CLAUDE.md, "Las categorías de borde de la matriz de
+migración".
 
 Por qué esos cinco no dependen de `largo_calificaciones`:
 

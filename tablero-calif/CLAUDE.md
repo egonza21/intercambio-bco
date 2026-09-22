@@ -604,18 +604,58 @@ El perfilado va primero porque su resultado cambia el resto del código.
    ahora se sigue usando la propuesta de la tabla "Mapeo idx → producto" tal
    cual, sin bloquear el resto del trabajo.
 
-## Distinción pendiente en la matriz de migración
+## Las categorías de borde de la matriz de migración
 
 Un cliente puede tener grupo en un producto en un mes y nulo al siguiente sin
-haberse ido del banco: dejó de calificar para ese producto. Son dos fenómenos
-distintos que hay que separar en la matriz:
+haberse ido del banco. **Resuelto**: son tres fenómenos distintos, no uno, y
+la matriz los muestra como columnas propias.
 
-- **Pérdida de elegibilidad**: el cliente está en la tabla ese mes, pero sin
-  grupo en ese producto. Es una decisión del modelo.
 - **Salida**: el cliente no está en la tabla ese mes. Es un cambio de
-  población.
+  población. Se detecta cruzando contra la base del mes (`tmp_migracion_*_base`),
+  no contra la larga.
+- **`perdida_por_corte`**: sigue en la tabla y **conserva modelo**. El modelo
+  lo calificó y el corte de *ese* producto lo dejó sin grupo. Es una decisión
+  de política del producto.
+- **`perdida_de_modelo`**: sigue en la tabla y **ya no tiene modelo**. Dejó de
+  ser calificado: salió del universo calificable.
 
-Requiere cruzar contra la base de clientes del mes, no solo contra la larga.
+Simétrico del lado de la entrada: `ganancia_por_corte` (ya tenía modelo y el
+corte lo dejaba fuera; ahora lo incluye) y `ganancia_de_modelo` (no tenía
+modelo y empezó a ser calificado).
+
+### Por qué la apertura no se puede hacer con `modelo_actual`
+
+Porque **`largo_calificaciones` lleva `grupo IS NOT NULL`**: quien pierde el
+grupo en un producto no tiene fila ese mes, el `full outer join` deja su lado
+entero en nulo, y `modelo_actual` viene nulo *siempre*. El nulo no distingue
+"perdió el modelo" de "la fila no existe" — significa siempre lo segundo.
+
+La información está en la **tabla ancha**, que `tmp_migracion_*_base` ya leía
+para separar salida de pérdida de elegibilidad. Ahí se agregan dos columnas:
+
+| columna | qué es |
+|---|---|
+| `tiene_modelo_general` | algún `modelo_*` no nulo entre los 12 no-vivienda |
+| `tiene_modelo_vivienda` | algún `modelo_*` no nulo entre los 4 de vivienda |
+
+**Son dos y no una** porque el modelo, igual que la PD, se replica por cliente
+dentro de cada serie (ver "La PD no es por producto"). En el paso de
+clasificación se usa la columna de la serie que le toca al producto, vía
+`familia_producto`.
+
+El join contra la base ya apunta al mes correcto sin tocarlo:
+`idx_mes_presencia` es el mes **destino** cuando falta el lado destino (que es
+lo que hay que mirar para una pérdida) y el mes **origen** cuando falta el
+lado origen (para una ganancia).
+
+### Lo que NO mide «(sin modelo)» en el flujo de modelos
+
+La matriz de flujo de modelos solo tiene filas de `categoria = 'movimiento'`,
+es decir clientes **con grupo en los dos meses**. Quien deja de ser calificado
+pierde también el grupo, sale de `largo_calificaciones` y **nunca llega a esa
+matriz**. Su fila y columna `(sin modelo)` son clientes con grupo y sin modelo
+—una anomalía del dato, ver "El modelo vacío"—, no bajas de calificación.
+Esas se ven en `perdida_de_modelo`, en la matriz de migración de grupo.
 
 ## Visuales que alimenta el tablero
 

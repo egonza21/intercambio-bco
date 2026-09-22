@@ -13,13 +13,22 @@
 -- Los primeros 6 meses no tienen mes de origen, así que no producen filas.
 --
 -- CATEGORÍAS
---   movimiento             tiene grupo en los dos meses. Es la matriz.
---   entrada                no estaba en la tabla en el mes origen.
---   ganancia_elegibilidad  estaba, pero sin grupo en ESE producto.
---   salida                 no está en la tabla en el mes destino.
---   perdida_elegibilidad   está, pero sin grupo en ESE producto.
--- Separar población de decisión del modelo exige cruzar contra la base del
--- mes: de ahí tmp_migracion_r6_base.
+--   movimiento          tiene grupo en los dos meses. Es la matriz.
+--   entrada             no estaba en la tabla en el mes origen.
+--   ganancia_por_corte  estaba y YA tenía modelo, pero el corte de este
+--                       producto lo dejaba sin grupo. Ahora lo incluye.
+--   ganancia_de_modelo  estaba y NO tenía modelo: empezó a ser calificado.
+--   salida              no está en la tabla en el mes destino.
+--   perdida_por_corte   sigue en la tabla y CONSERVA modelo: el modelo lo
+--                       calificó y el corte de este producto lo dejó sin grupo.
+--   perdida_de_modelo   sigue en la tabla y YA NO tiene modelo: dejó de ser
+--                       calificado del todo.
+--
+-- Las dos últimas son la distinción que importa y no se puede sacar de
+-- largo_calificaciones, porque esa tabla lleva `grupo IS NOT NULL`: quien
+-- pierde el grupo no tiene fila y su `modelo` se vuelve invisible. Por eso
+-- tmp_migracion_r6_base, que ya leía la tabla ancha para separar población
+-- de decisión del modelo, trae además si el cliente tiene modelo ese mes.
 --
 -- DOS SEGMENTOS y DOS MODELOS, no coalescidos: un cliente que cambia de
 -- segmento no cambió de riesgo, y el par de modelos permite distinguir
@@ -49,8 +58,8 @@ create table proceso.tmp_migracion_r6_destino_{IDUNICO}
 stored as parquet
 as
 select
-    l.num_doc, l.tipo_doc, l.segmento, l.producto, l.idx_mes,
-    l.grupo_base, l.modelo
+    l.num_doc, l.tipo_doc, l.segmento, l.producto,
+    l.familia_producto, l.idx_mes, l.grupo_base, l.modelo
   from proceso.largo_calificaciones_{IDUNICO} l;
 
 compute stats proceso.tmp_migracion_r6_destino_{IDUNICO};
@@ -60,7 +69,8 @@ create table proceso.tmp_migracion_r6_origen_{IDUNICO}
 stored as parquet
 as
 select
-    l.num_doc, l.tipo_doc, l.segmento, l.producto, l.modelo,
+    l.num_doc, l.tipo_doc, l.segmento, l.producto,
+    l.familia_producto, l.modelo,
     l.idx_mes + 6 as idx_mes_destino,
     l.grupo_base
   from proceso.largo_calificaciones_{IDUNICO} l;
@@ -74,7 +84,36 @@ as
 select
     c.num_doc,
     c.tipo_doc,
-    c.ingestion_year * 12 + c.ingestion_month as idx_mes
+    c.ingestion_year * 12 + c.ingestion_month as idx_mes,
+    -- ¿El cliente tiene modelo ese mes? Es lo que separa "el corte lo dejó
+    -- sin grupo" de "dejó de ser calificado". No se puede sacar de
+    -- largo_calificaciones: esa tabla lleva `grupo IS NOT NULL`, así que quien
+    -- perdió el grupo no tiene fila y su modelo se vuelve invisible. Acá sí,
+    -- porque esta es la tabla ancha.
+    --
+    -- Son DOS columnas y no una porque el modelo, como la PD, se replica por
+    -- cliente dentro de cada serie: una para los 12 productos no-vivienda y
+    -- otra para los 4 de vivienda. Ver CLAUDE.md, "La PD no es por producto".
+    case when coalesce(
+            nullif(trim(c.modelo_consumo), ''),
+            nullif(trim(c.modelo_tdc), ''),
+            nullif(trim(c.modelo_libranza), ''),
+            nullif(trim(c.modelo_rota), ''),
+            nullif(trim(c.modelo_comercial), ''),
+            nullif(trim(c.modelo_micro), ''),
+            nullif(trim(c.modelo_sobre), ''),
+            nullif(trim(c.modelo_sufi_veh), ''),
+            nullif(trim(c.modelo_sufi_moto), ''),
+            nullif(trim(c.modelo_sufi_cpe), ''),
+            nullif(trim(c.modelo_sufi_con), ''),
+            nullif(trim(c.modelo_calm), ''))
+         is not null then true else false end as tiene_modelo_general,
+    case when coalesce(
+            nullif(trim(c.modelo_hip_vis), ''),
+            nullif(trim(c.modelo_hip_novis), ''),
+            nullif(trim(c.modelo_lea_hab_vis), ''),
+            nullif(trim(c.modelo_lea_hab_novis), ''))
+         is not null then true else false end as tiene_modelo_vivienda
   from resultados_riesgos.maestro_calificaciones_pn c
   -- Salvaguarda contra ingestas parciales de principios de mes. Ver CLAUDE.md,
   -- "El filtro de ingestion_day". HOY NO DESCARTA NADA: los días observados van
@@ -93,6 +132,8 @@ select
   coalesce(d.num_doc,  o.num_doc)          as num_doc,
   coalesce(d.tipo_doc, o.tipo_doc)         as tipo_doc,
   coalesce(d.producto, o.producto)         as producto,
+  coalesce(d.familia_producto,
+           o.familia_producto)             as familia_producto,
   o.segmento                               as segmento_anterior,
   d.segmento                               as segmento_actual,
   coalesce(d.idx_mes,  o.idx_mes_destino)  as idx_mes_destino,
@@ -119,6 +160,7 @@ stored as parquet
 as
 select
   p.producto,
+  p.familia_producto,
   p.segmento_anterior,
   p.segmento_actual,
   p.idx_mes_destino,
@@ -127,14 +169,26 @@ select
   p.grupo_base_destino,
   p.modelo_anterior,
   p.modelo_actual,
+  -- El orden de las ramas importa: cada una asume que las de arriba ya
+  -- descartaron su caso. Cuando se evalúa `tiene_modelo` ya se sabe que
+  -- b.num_doc no es nulo, así que la columna nunca llega nula acá.
   case
     when p.grupo_base_origen is not null
      and p.grupo_base_destino is not null       then 'movimiento'
     when p.grupo_base_origen is null
      and b.num_doc is null                      then 'entrada'
-    when p.grupo_base_origen is null            then 'ganancia_elegibilidad'
+    when p.grupo_base_origen is null
+     and case when p.familia_producto = 'vivienda'
+                     then b.tiene_modelo_vivienda
+                     else b.tiene_modelo_general end
+                                                then 'ganancia_por_corte'
+    when p.grupo_base_origen is null            then 'ganancia_de_modelo'
     when b.num_doc is null                      then 'salida'
-    else                                             'perdida_elegibilidad'
+    when case when p.familia_producto = 'vivienda'
+                     then b.tiene_modelo_vivienda
+                     else b.tiene_modelo_general end
+                                                then 'perdida_por_corte'
+    else                                             'perdida_de_modelo'
   end as categoria
 from proceso.tmp_migracion_r6_par_{IDUNICO} p
 left join proceso.tmp_migracion_r6_base_{IDUNICO} b

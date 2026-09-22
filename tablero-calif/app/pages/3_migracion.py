@@ -142,41 +142,57 @@ k[3].metric("Empeoraron", theme.fmt_miles(n_peor), delta=_pc(n_peor),
             delta_color="off", help="Pasaron a un grupo de mayor riesgo.")
 k[4].metric("Salieron", theme.fmt_miles(_cat("salida")),
             help="No están en la tabla en el mes destino. Cambio de población.")
-k[5].metric("Perdieron elegibilidad", theme.fmt_miles(_cat("perdida_elegibilidad")),
+# "perdida_elegibilidad" es el nombre previo a la apertura: se suma para que
+# una tabla construida antes no muestre un cero que no es cero.
+_per_corte = _cat("perdida_por_corte")
+_per_modelo = _cat("perdida_de_modelo")
+_per = _per_corte + _per_modelo + _cat("perdida_elegibilidad")
+k[5].metric("Perdieron elegibilidad", theme.fmt_miles(_per),
             help="Tenían grupo y quedaron SIN grupo, sin irse de la tabla. Es "
                  "una decisión del modelo, no una baja: por eso va aparte de "
-                 "las salidas y no sumada con ellas.")
+                 "las salidas y no sumada con ellas. Abajo va abierta en sus "
+                 "dos causas.")
 
 # --- ganancia y pérdida de calificación, en cantidad -----------------------
 # Van en su propia fila y no mezcladas con entradas y salidas: entrar o salir
 # de la tabla es población; ganar o perder el grupo es el modelo decidiendo.
-_gan, _per = _cat("ganancia_elegibilidad"), _cat("perdida_elegibilidad")
+# Y cada una abierta en dos, porque el dueño del problema es distinto: el
+# corte de ESTE producto, o el universo calificable del modelo.
+_gan_corte = _cat("ganancia_por_corte")
+_gan_modelo = _cat("ganancia_de_modelo")
+_gan = _gan_corte + _gan_modelo + _cat("ganancia_elegibilidad")
 _ctx = (f" · {theme.etiqueta_segmento(segmento)}" if segmento != "todos" else "")
 st.markdown(f"### Quién entró y salió de la calificación{_ctx}")
 e = st.columns(4)
-e[0].metric("Ganaron calificación", theme.fmt_miles(_gan),
-            help="Estaban en la tabla el mes de origen SIN grupo en este "
-                 "producto, y este mes sí lo tienen. El modelo los empezó a "
-                 "calificar.")
-e[1].metric("Perdieron calificación", theme.fmt_miles(_per),
-            help="Seguían en la tabla y quedaron sin grupo en este producto.")
-e[2].metric("Neto de calificación", theme.fmt_miles(_gan - _per),
-            delta=(theme.fmt_pct((_gan - _per) / comparados)
-                   if comparados else None), delta_color="off",
-            help="Ganaron menos perdieron, sobre los clientes comparados.")
-e[3].metric("Entradas − salidas (población)",
-            theme.fmt_miles(_cat("entrada") - _cat("salida")),
-            help="El otro fenómeno, y no hay que sumarlos: este mide clientes "
-                 "que aparecen o desaparecen de la tabla.")
+e[0].metric("Ganaron · el corte los incluyó", theme.fmt_miles(_gan_corte),
+            help="Estaban en la tabla el mes de origen y YA tenían modelo, "
+                 "pero el corte de este producto los dejaba sin grupo. Ahora "
+                 "los incluye: cambió la política del producto, no el "
+                 "universo del modelo.")
+e[1].metric("Ganaron · empezaron a calificarse", theme.fmt_miles(_gan_modelo),
+            help="Estaban en la tabla y NO tenían modelo: entraron al "
+                 "universo calificable.")
+e[2].metric("Perdieron · el corte los excluyó", theme.fmt_miles(_per_corte),
+            help="Siguen en la tabla y CONSERVAN modelo: el modelo los "
+                 "calificó y el corte de este producto los dejó sin grupo.")
+e[3].metric("Perdieron · dejaron de calificarse", theme.fmt_miles(_per_modelo),
+            help="Siguen en la tabla y YA NO tienen modelo: salieron del "
+                 "universo calificable. Es el caso grave.")
+e2 = st.columns(4)
+e2[0].metric("Neto de calificación", theme.fmt_miles(_gan - _per),
+             delta=(theme.fmt_pct((_gan - _per) / comparados)
+                    if comparados else None), delta_color="off",
+             help="Ganaron menos perdieron, sobre los clientes comparados.")
+e2[1].metric("Entradas − salidas (población)",
+             theme.fmt_miles(_cat("entrada") - _cat("salida")),
+             help="El otro fenómeno, y no hay que sumarlos: este mide clientes "
+                  "que aparecen o desaparecen de la tabla.")
 st.markdown(
-    f'<p class="nota"><b>Lo que todavía NO se puede separar.</b> De los '
-    f'{theme.fmt_miles(_per)} que perdieron calificación no se sabe cuántos '
-    f'conservaron modelo y quedaron fuera por el corte, y cuántos dejaron de '
-    f'tener modelo del todo. El motivo está en el dato, no en el visual: '
-    f'<code>largo_calificaciones</code> lleva <code>grupo IS NOT NULL</code>, '
-    f'así que la fila del mes destino no existe y <code>modelo_actual</code> '
-    f'viene nulo para las {theme.fmt_miles(_per)}, sin distinguir un caso del '
-    f'otro. Requiere tocar la ETL de migración.</p>',
+    '<p class="nota">La apertura sale de si el cliente tiene <b>algún</b> '
+    'modelo ese mes en su serie —general o vivienda—, que se calcula sobre la '
+    'tabla ancha en <code>tmp_migracion_*_base</code>. No se puede sacar de '
+    '<code>modelo_actual</code>: quien pierde el grupo no tiene fila en '
+    '<code>largo_calificaciones</code> y esa columna le viene nula siempre.</p>',
     unsafe_allow_html=True)
 
 st.markdown(f"## Matriz de migración · {theme.etiqueta_mes_idx(mes_mig)}")

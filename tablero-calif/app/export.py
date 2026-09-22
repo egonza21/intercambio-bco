@@ -372,17 +372,22 @@ def construir(desde: int, hasta: int, mes: int, rezago: int) -> str:
         doc.figura(charts.matriz_migracion(mig_mes, "consumo", True))
         doc.nota("El tono dice la dirección y la intensidad el volumen, como "
                  "porcentaje de la fila de origen. La diagonal es neutra a "
-                 "propósito: es estabilidad, no señal. Las dos últimas filas y "
-                 "las dos últimas columnas van en gris, fuera de la escala de "
-                 "riesgo: son las cuatro categorías de borde, y están "
-                 "separadas porque perder el grupo por decisión del modelo "
-                 "(«perdió elegibilidad») no es lo mismo que desaparecer de la "
-                 "tabla («salida»).")
+                 "propósito: es estabilidad, no señal. Las últimas filas y "
+                 "las últimas columnas van en gris, fuera de la escala de "
+                 "riesgo: son las categorías de borde, separadas porque son "
+                 "problemas de dueños distintos. «El corte lo excluyó» es "
+                 "política del producto — el modelo sí calificó al cliente; "
+                 "«dejó de calificarse» es que perdió el modelo y salió del "
+                 "universo calificable; «salida» es cambio de población.")
         doc.sub("Flujo de modelos")
         doc.figura(charts.flujo_modelos(mig_mes, "consumo"))
-        doc.nota(f"«{charts.SIN_MODELO}» son clientes con grupo y sin modelo. "
-                 f"La columna dice cuántos dejaron de ser calificados entre "
-                 f"los dos meses; la fila, cuántos volvieron a serlo.")
+        doc.nota(f"«{charts.SIN_MODELO}» NO son los que dejaron de ser "
+                 f"calificados: acá solo entran clientes con grupo en los dos "
+                 f"meses, y quien deja de ser calificado pierde también el "
+                 f"grupo y no llega a esta matriz. Lo que mide es clientes con "
+                 f"grupo y sin modelo, que es una anomalía del dato. Los que "
+                 f"dejaron de ser calificados están en la matriz de migración "
+                 f"de grupo, en la columna «PERDIÓ · dejó de calificarse».")
         doc.sub("Estabilidad y deterioro en el tiempo")
         doc.figura(charts.estabilidad_deterioro(mig, "consumo"))
         doc.sub("Peores saltos")

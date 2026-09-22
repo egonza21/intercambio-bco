@@ -14,19 +14,32 @@ from charts_base import _sin_datos, _rezago, _pie_comparacion
 # MIGRACION
 # ===========================================================================
 
-# Las cuatro categorías que no son movimiento. NO son un grupo de riesgo: van
-# en gris, fuera de la escala divergente.
-_FUERA = ["entrada", "ganancia_elegibilidad", "salida", "perdida_elegibilidad"]
-
-# Filas de la matriz sin grupo de ORIGEN (el cliente aparece), columnas sin
-# grupo de DESTINO (el cliente desaparece de la larga).
-_ORIGEN_FUERA = ["entrada", "ganancia_elegibilidad"]
-_DESTINO_FUERA = ["salida", "perdida_elegibilidad"]
+# Las categorías que no son movimiento. NO son un grupo de riesgo: van en
+# gris, fuera de la escala divergente.
+#
+# Ganar y perder elegibilidad están ABIERTAS en dos por el modelo del cliente
+# en el mes de referencia (07_migracion_r1.sql, paso 5). La distinción es de
+# dueño distinto: que el corte de un producto deje fuera a un cliente que el
+# modelo sí calificó es una decisión de política del producto; que el cliente
+# deje de tener modelo es que salió del universo calificable.
+#
+# Filas: sin grupo de ORIGEN. Columnas: sin grupo de DESTINO.
+_ORIGEN_FUERA = ["entrada", "ganancia_por_corte", "ganancia_de_modelo"]
+_DESTINO_FUERA = ["salida", "perdida_por_corte", "perdida_de_modelo"]
+# Nombres previos a la apertura. Se muestran solo si la tabla leída todavía
+# los trae, para que una construcción vieja no pierda filas en silencio.
+_ORIGEN_LEGADO = ["ganancia_elegibilidad"]
+_DESTINO_LEGADO = ["perdida_elegibilidad"]
+_FUERA = _ORIGEN_FUERA + _DESTINO_FUERA + _ORIGEN_LEGADO + _DESTINO_LEGADO
 _ETIQUETA_FUERA = {
     "entrada": "entrada (población)",
-    "ganancia_elegibilidad": "ganó elegibilidad",
+    "ganancia_por_corte": "ganó · el corte lo incluyó",
+    "ganancia_de_modelo": "ganó · empezó a calificarse",
+    "ganancia_elegibilidad": "ganó elegibilidad (sin abrir)",
     "salida": "salida (población)",
-    "perdida_elegibilidad": "PERDIÓ elegibilidad",
+    "perdida_por_corte": "PERDIÓ · el corte lo excluyó",
+    "perdida_de_modelo": "PERDIÓ · dejó de calificarse",
+    "perdida_elegibilidad": "perdió elegibilidad (sin abrir)",
 }
 # Gris claro a gris medio: mismo rol que la escala secuencial pero sin tono,
 # para que se lea como "fuera de la escala de riesgo" y no como un grupo más.
@@ -74,13 +87,15 @@ def matriz_migracion(df: pd.DataFrame, producto: str,
     no son grupos de riesgo, son cambios de población o decisiones del modelo.
     Son cuatro categorías DISTINTAS y se muestran separadas --
 
-        fila «entrada»            el cliente no estaba en la tabla
-        fila «ganó elegibilidad»  estaba, sin grupo en ESE producto
-        col. «salida»             el cliente ya no está en la tabla
-        col. «perdió elegibilidad» sigue, pero sin grupo en ESE producto
+        fila «entrada»                     no estaba en la tabla
+        fila «ganó · el corte lo incluyó»  estaba y ya tenía modelo
+        fila «ganó · empezó a calificarse» estaba y no tenía modelo
+        col. «salida»                      ya no está en la tabla
+        col. «PERDIÓ · el corte lo excluyó» sigue y conserva modelo
+        col. «PERDIÓ · dejó de calificarse» sigue y ya no tiene modelo
 
-    -- porque perder un grupo por decisión del modelo y desaparecer de la
-    población son problemas de dueños distintos.
+    -- porque son tres problemas de dueños distintos: el corte de un producto,
+    el universo calificable del modelo, y la población.
 
     El denominador de cada fila incluye ahora las dos columnas grises: de los
     que estaban en G3, cuántos siguen en G3 y cuántos se fueron. Sin eso la
@@ -101,8 +116,9 @@ def matriz_migracion(df: pd.DataFrame, producto: str,
         return _sin_datos()
 
     gs = theme.GRUPOS_BASE_ORDENADOS
-    ejes_y = gs + _ORIGEN_FUERA
-    ejes_x = gs + _DESTINO_FUERA
+    presentes = set(d["categoria"])
+    ejes_y = gs + _ORIGEN_FUERA + [c for c in _ORIGEN_LEGADO if c in presentes]
+    ejes_x = gs + _DESTINO_FUERA + [c for c in _DESTINO_LEGADO if c in presentes]
     cnt = pd.DataFrame(0.0, index=ejes_y, columns=ejes_x)
 
     mov = d[d["categoria"] == "movimiento"]
@@ -112,14 +128,14 @@ def matriz_migracion(df: pd.DataFrame, producto: str,
              .pivot(index="grupo_base_origen", columns="grupo_base_destino",
                     values="clientes").reindex(index=gs, columns=gs).fillna(0))
         cnt.loc[gs, gs] = m.values
-    for cat in _ORIGEN_FUERA:      # sin grupo de origen: fila propia
+    for cat in ejes_y[len(gs):]:   # sin grupo de origen: fila propia
         sub = d[d["categoria"] == cat]
         if sub.empty:
             continue
         v = (sub.groupby("grupo_base_destino")["clientes"].sum()
              .reindex(gs).fillna(0))
         cnt.loc[cat, gs] = v.values
-    for cat in _DESTINO_FUERA:     # sin grupo de destino: columna propia
+    for cat in ejes_x[len(gs):]:   # sin grupo de destino: columna propia
         sub = d[d["categoria"] == cat]
         if sub.empty:
             continue
@@ -175,10 +191,12 @@ def matriz_migracion(df: pd.DataFrame, producto: str,
     fig.add_annotation(
         x=0, y=-0.20, xref="paper", yref="paper", xanchor="left",
         showarrow=False, align="left",
-        text=("En gris, fuera de la escala de riesgo: las dos últimas filas son "
-              "clientes sin grupo en el mes de origen y las dos últimas "
-              "columnas, sin grupo en el de destino. «Perdió elegibilidad» es "
-              "una decisión del modelo; «salida», un cambio de población."),
+        text=("En gris, fuera de la escala de riesgo: las últimas filas son "
+              "clientes sin grupo en el mes de origen y las últimas columnas, "
+              "sin grupo en el de destino. «El corte lo excluyó» es una "
+              "decisión de política del producto — el modelo sí calificó al "
+              "cliente; «dejó de calificarse» es que perdió el modelo y salió "
+              "del universo calificable; «salida» es cambio de población."),
         font=dict(size=11, color=theme.GRIS_FUERA_ESCALA, family=theme.FONT))
 
     _pie_comparacion(fig, d, y=-0.30)
@@ -190,9 +208,9 @@ def matriz_migracion(df: pd.DataFrame, producto: str,
     else:
         t_dst = "Grupo en el mes destino"
         t_org = f"Grupo {rez} mes(es) antes"
-    etq_y = gs + [_ETIQUETA_FUERA[c] for c in _ORIGEN_FUERA]
-    etq_x = gs + [_ETIQUETA_FUERA[c] for c in _DESTINO_FUERA]
-    fig.update_layout(height=640)
+    etq_y = [_ETIQUETA_FUERA.get(c, c) for c in ejes_y]
+    etq_x = [_ETIQUETA_FUERA.get(c, c) for c in ejes_x]
+    fig.update_layout(height=max(640, 46 * len(ejes_y) + 220))
     # Los ejes van por CLAVE de categoría; el texto legible solo en ticktext.
     fig.update_xaxes(title_text=t_dst, side="top", showline=False, ticks="",
                      type="category", categoryorder="array", categoryarray=ejes_x,
@@ -272,9 +290,15 @@ def flujo_modelos(df: pd.DataFrame, producto: str | None = None) -> go.Figure:
     nota = ("La diagonal (los que no cambiaron de modelo) va sin color para "
             "que no domine la escala; el conteo sigue anotado.")
     if SIN_MODELO in ejes:
-        nota += (f" «{SIN_MODELO}» son clientes CON grupo y sin modelo: la "
-                 f"columna dice cuántos dejaron de ser calificados y la fila, "
-                 f"cuántos volvieron a serlo.")
+        nota += (
+            f" «{SIN_MODELO}» NO son los que dejaron de ser calificados: acá "
+            f"solo entran clientes con grupo en los DOS meses, y quien deja de "
+            f"ser calificado pierde también el grupo, sale de "
+            f"largo_calificaciones y nunca llega a esta matriz. Lo que mide "
+            f"esta fila y esta columna es clientes CON grupo y SIN modelo, que "
+            f"es más bien una anomalía del dato. Los que dejaron de ser "
+            f"calificados se ven en la matriz de migración de grupo, en la "
+            f"columna «{_ETIQUETA_FUERA['perdida_de_modelo']}».")
     fig.add_annotation(
         x=0, y=-0.14, xref="paper", yref="paper", xanchor="left", showarrow=False,
         align="left", text=nota,
