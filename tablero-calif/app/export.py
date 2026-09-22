@@ -372,7 +372,17 @@ def construir(desde: int, hasta: int, mes: int, rezago: int) -> str:
         doc.figura(charts.matriz_migracion(mig_mes, "consumo", True))
         doc.nota("El tono dice la dirección y la intensidad el volumen, como "
                  "porcentaje de la fila de origen. La diagonal es neutra a "
-                 "propósito: es estabilidad, no señal.")
+                 "propósito: es estabilidad, no señal. Las dos últimas filas y "
+                 "las dos últimas columnas van en gris, fuera de la escala de "
+                 "riesgo: son las cuatro categorías de borde, y están "
+                 "separadas porque perder el grupo por decisión del modelo "
+                 "(«perdió elegibilidad») no es lo mismo que desaparecer de la "
+                 "tabla («salida»).")
+        doc.sub("Flujo de modelos")
+        doc.figura(charts.flujo_modelos(mig_mes, "consumo"))
+        doc.nota(f"«{charts.SIN_MODELO}» son clientes con grupo y sin modelo. "
+                 f"La columna dice cuántos dejaron de ser calificados entre "
+                 f"los dos meses; la fila, cuántos volvieron a serlo.")
         doc.sub("Estabilidad y deterioro en el tiempo")
         doc.figura(charts.estabilidad_deterioro(mig, "consumo"))
         doc.sub("Peores saltos")

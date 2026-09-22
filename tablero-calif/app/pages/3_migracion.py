@@ -94,9 +94,16 @@ serie = charts.serie_estabilidad(mig, producto)
 fila = serie[serie["idx_mes"] == mes_mig]
 d = mig_mes[mig_mes["producto"] == producto] if producto != "todos" else mig_mes
 if segmento != "todos" and not d.empty:
-    d = d[d["segmento_actual"].map(theme._cod) == theme._cod(segmento)]
-if mismo_seg and not d.empty and "segmento_anterior" in d.columns:
-    d = d[d["segmento_anterior"] == d["segmento_actual"]]
+    # Una salida no tiene segmento_actual: se filtra por el que exista.
+    _act = d["segmento_actual"].map(theme._cod)
+    _ant = d["segmento_anterior"].map(theme._cod)
+    d = d[_act.where(_act != "", _ant) == theme._cod(segmento)]
+if mismo_seg and not d.empty:
+    # La misma función que usa la matriz. El `==` plano que había acá borraba
+    # las cuatro categorías de borde -- su segmento de un lado es nulo por
+    # construcción -- y por eso los KPIs de salida y elegibilidad daban 0 con
+    # el filtro activo, que es el default.
+    d = charts.filtrar_mismo_segmento(d)
 
 
 def _cat(*cats) -> int:
@@ -140,13 +147,47 @@ k[5].metric("Perdieron elegibilidad", theme.fmt_miles(_cat("perdida_elegibilidad
                  "una decisión del modelo, no una baja: por eso va aparte de "
                  "las salidas y no sumada con ellas.")
 
+# --- ganancia y pérdida de calificación, en cantidad -----------------------
+# Van en su propia fila y no mezcladas con entradas y salidas: entrar o salir
+# de la tabla es población; ganar o perder el grupo es el modelo decidiendo.
+_gan, _per = _cat("ganancia_elegibilidad"), _cat("perdida_elegibilidad")
+_ctx = (f" · {theme.etiqueta_segmento(segmento)}" if segmento != "todos" else "")
+st.markdown(f"### Quién entró y salió de la calificación{_ctx}")
+e = st.columns(4)
+e[0].metric("Ganaron calificación", theme.fmt_miles(_gan),
+            help="Estaban en la tabla el mes de origen SIN grupo en este "
+                 "producto, y este mes sí lo tienen. El modelo los empezó a "
+                 "calificar.")
+e[1].metric("Perdieron calificación", theme.fmt_miles(_per),
+            help="Seguían en la tabla y quedaron sin grupo en este producto.")
+e[2].metric("Neto de calificación", theme.fmt_miles(_gan - _per),
+            delta=(theme.fmt_pct((_gan - _per) / comparados)
+                   if comparados else None), delta_color="off",
+            help="Ganaron menos perdieron, sobre los clientes comparados.")
+e[3].metric("Entradas − salidas (población)",
+            theme.fmt_miles(_cat("entrada") - _cat("salida")),
+            help="El otro fenómeno, y no hay que sumarlos: este mide clientes "
+                 "que aparecen o desaparecen de la tabla.")
+st.markdown(
+    f'<p class="nota"><b>Lo que todavía NO se puede separar.</b> De los '
+    f'{theme.fmt_miles(_per)} que perdieron calificación no se sabe cuántos '
+    f'conservaron modelo y quedaron fuera por el corte, y cuántos dejaron de '
+    f'tener modelo del todo. El motivo está en el dato, no en el visual: '
+    f'<code>largo_calificaciones</code> lleva <code>grupo IS NOT NULL</code>, '
+    f'así que la fila del mes destino no existe y <code>modelo_actual</code> '
+    f'viene nulo para las {theme.fmt_miles(_per)}, sin distinguir un caso del '
+    f'otro. Requiere tocar la ETL de migración.</p>',
+    unsafe_allow_html=True)
+
 st.markdown(f"## Matriz de migración · {theme.etiqueta_mes_idx(mes_mig)}")
 st.markdown(
     '<p class="sub">El tono dice la dirección (azul mejora, rojo deterioro) y '
     'la intensidad, el volumen como porcentaje de la fila de origen. La '
     'diagonal queda neutra a propósito, sin importar su masa: es estabilidad, '
-    'no señal. Entradas, salidas y elegibilidad van al pie, en gris, fuera de '
-    'la escala de riesgo.</p>',
+    'no señal. Entradas, salidas y las dos de elegibilidad son <b>filas y '
+    'columnas propias</b>, en gris y fuera de la escala de riesgo: no son un '
+    'grupo, y perder el grupo por decisión del modelo no es lo mismo que '
+    'desaparecer de la población.</p>',
     unsafe_allow_html=True)
 st.plotly_chart(charts.matriz_migracion(mig_mes, producto, mismo_seg, segmento),
                 use_container_width=True, key="p3_matriz")

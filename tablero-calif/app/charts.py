@@ -44,6 +44,8 @@ from charts_anomalias import (
     puente_base,
     puente_por_segmento)
 from charts_migracion import (
+    SIN_MODELO,
+    filtrar_mismo_segmento,
     matriz_migracion,
     flujo_modelos,
     estabilidad_deterioro,
@@ -76,6 +78,7 @@ __all__ = [
     "chequeo_mapeo", "chequeo_pd_grupo", "cobertura", "composicion_grupo",
     "discordancia_pd_grupo", "estabilidad_deterioro", "flujo_modelos",
     "heatmap_segmento_grupo", "histograma_pd", "leyenda_comparacion",
+    "SIN_MODELO", "filtrar_mismo_segmento",
     "matriz_migracion", "matriz_migracion_pd", "matriz_segmento_producto",
     "mes_comparacion", "mezcla_riesgo", "mini_serie", "modelos_vivos",
     "psi_grupos", "psi_grupos_grafico", "psi_pd", "psi_pd_grafico",
