@@ -42,6 +42,9 @@ TTL = 3600  # una hora
 # ||   ESTE BLOQUE y en ningún otro lado. Ninguna otra función del repo    ||
 # ||   importa `helper` ni sabe cómo se conecta a Impala.                  ||
 # ||                                                                       ||
+# ||   Hay UNA instancia por proceso y no se cierra nunca: ver _helper().  ||
+# ||   Todo lo que ejecute algo pasa por _con_reintento().                 ||
+# ||                                                                       ||
 # ===========================================================================
 
 DSN = "impala-virtual-prd"
@@ -70,15 +73,79 @@ IDUNICO_POR_DEFECTO = "vfinal"
 FORMATO_PARAMETRO = "{{{nombre}}}"
 
 
+@st.cache_resource(show_spinner=False)
 def _helper():
+    """UNA instancia por proceso de Streamlit, compartida por todas las páginas.
+
+    Antes se instanciaba en cada llamada, y `_ejecutar_ddl` se llama una vez
+    por sentencia: reconstruir todo son ~170 conexiones nuevas para nada.
+
+    `cache_resource` y no `cache_data` porque esto no es un valor serializable
+    sino un recurso vivo, y porque se quiere compartido entre sesiones.
+
+    NO se cierra. El patrón del banco es instanciar y reusar; un `close` acá
+    dejaría inservible la instancia que siguen usando las demás páginas.
+    """
     from helper import Helper
 
     return Helper(dsn=DSN, username=USUARIO)
 
 
+# Marcas de que se cayó la CONEXIÓN. A diferencia de un notebook, el proceso
+# de Streamlit vive horas y una instancia cacheada puede quedarse con el socket
+# muerto por inactividad. Solo con estas se reinstancia y se reintenta.
+_SENALES_CONEXION = (
+    "broken pipe", "closed", "connection", "conexión", "eof",
+    "not connected", "refused", "reset by peer", "socket", "thrift",
+    "timed out", "timeout", "transport", "unable to connect",
+)
+# Y estas ganan siempre: son errores de la CONSULTA. Reintentar un SQL que
+# falló no lo arregla -- lo vuelve a correr, que en un DDL puede ser caro --
+# y además esconde el error real detrás de un segundo intento idéntico.
+_SENALES_SQL = (
+    "already exists", "analysisexception", "authorizationexception",
+    "does not exist", "memory limit exceeded", "parseexception",
+    "semantic error", "syntax error",
+)
+
+
+def _es_error_de_conexion(e: BaseException) -> bool:
+    """Distingue "se cayó el socket" de "la consulta está mal".
+
+    Se mira toda la cadena de causas, porque el helper puede envolver el error
+    de transporte en uno propio. Ante la duda NO es de conexión: un falso
+    positivo reejecuta un DDL, y eso sí hace daño.
+    """
+    actual: BaseException | None = e
+    while actual is not None:
+        texto = f"{type(actual).__name__} {actual}".lower()
+        if any(m in texto for m in _SENALES_SQL):
+            return False
+        if any(m in texto for m in _SENALES_CONEXION):
+            return True
+        actual = actual.__cause__ or actual.__context__
+    return False
+
+
+def _con_reintento(operacion):
+    """Corre `operacion(helper)` y, si se cayó la conexión, reinstancia y
+    reintenta UNA sola vez.
+
+    El reintento es exactamente uno: si la segunda también falla, el problema
+    no es una conexión dormida y el error tiene que verse.
+    """
+    try:
+        return operacion(_helper())
+    except Exception as e:
+        if not _es_error_de_conexion(e):
+            raise
+        _helper.clear()
+        return operacion(_helper())
+
+
 def _ejecutar(consulta: str, parametros: dict[str, str]) -> pd.DataFrame:
     """Ejecuta una consulta que DEVUELVE filas."""
-    return _helper().obtener_dataframe(consulta, parametros)
+    return _con_reintento(lambda hp: hp.obtener_dataframe(consulta, parametros))
 
 
 # Métodos candidatos para DDL, en orden de preferencia. `obtener_dataframe`
@@ -87,6 +154,12 @@ def _ejecutar(consulta: str, parametros: dict[str, str]) -> pd.DataFrame:
 # expone el helper -- no está instalado en el entorno donde se escribió esto --
 # así que se elige el primero que exista y, si no hay ninguno, se cae a
 # obtener_dataframe, que es el comportamiento anterior.
+#
+# PENDIENTE: se sabe que el helper expone `ejecutar_consultas(...)`, pero no
+# con qué firma -- el plural sugiere que recibe una lista, y esta función pasa
+# UNA sentencia como string. No se agrega a la lista a ciegas: si acepta un
+# iterable, pasarle un string lo recorrería carácter a carácter. Confirmada la
+# firma, va primera acá (o se ajusta _ejecutar_ddl para pasarle una lista).
 _METODOS_DDL = ("ejecutar", "ejecutar_sentencia", "execute", "ejecutar_ddl")
 
 
@@ -95,13 +168,15 @@ def _ejecutar_ddl(sentencia: str) -> None:
 
     Si el helper resulta exponer otro nombre, se agrega a _METODOS_DDL y no hay
     que tocar nada más."""
-    hp = _helper()
-    for nombre in _METODOS_DDL:
-        metodo = getattr(hp, nombre, None)
-        if callable(metodo):
-            metodo(sentencia)
-            return
-    hp.obtener_dataframe(sentencia, {})
+    def _correr(hp):
+        for nombre in _METODOS_DDL:
+            metodo = getattr(hp, nombre, None)
+            if callable(metodo):
+                metodo(sentencia)
+                return
+        hp.obtener_dataframe(sentencia, {})
+
+    _con_reintento(_correr)
 
 
 def metodo_ddl_detectado() -> str:

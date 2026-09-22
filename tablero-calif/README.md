@@ -76,6 +76,19 @@ USUARIO = "efgon"
 FORMATO_PARAMETRO = "{{{nombre}}}"   # cambiar si el helper usa otro estilo
 ```
 
+**Hay una sola instancia del helper por proceso** (`@st.cache_resource`),
+compartida por todas las páginas, y **no se cierra nunca**. Instanciar por
+llamada costaba una conexión nueva por sentencia, y reconstruir todo son unas
+170.
+
+El proceso de Streamlit vive horas, así que una instancia cacheada puede
+quedarse con el socket muerto por inactividad. Por eso todo lo que ejecuta
+algo pasa por `_con_reintento()`: si el error es **de conexión**, limpia el
+caché, reinstancia y reintenta **una vez**. Si es de SQL, propaga sin
+reintentar — reejecutar un DDL que falló es caro y esconde el error real. La
+distinción está en `_es_error_de_conexion()`, que recorre la cadena de causas
+y, ante la duda, dice que no.
+
 Los agregados se cachean una hora (`@st.cache_data`). Para forzar una
 relectura: tecla `C` en la app, o «Clear cache» en el menú.
 
