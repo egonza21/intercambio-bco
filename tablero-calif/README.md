@@ -89,6 +89,21 @@ reintentar — reejecutar un DDL que falló es caro y esconde el error real. La
 distinción está en `_es_error_de_conexion()`, que recorre la cadena de causas
 y, ante la duda, dice que no.
 
+Las sentencias sin retorno (drop, create table as, compute stats) van por
+`data.METODO_DDL`, **un nombre y no una lista de candidatos**. Si el helper no
+lo expone, la página de Construcción lo muestra arriba y en rojo, deshabilita
+los botones de reconstruir y dice qué métodos sí encontró. No hay respaldo a
+`obtener_dataframe`: un respaldo silencioso es lo que esconde un nombre mal
+escrito hasta que alguien mira los datos.
+
+> El nombre es **singular**: `ejecutar_consulta`. No se puede inspeccionar la
+> clase fuera del banco —el paquete no está instalado—, así que la verificación
+> de la página es lo que cubre ese hueco. Primero se escribió en plural y
+> estaba mal.
+
+Se ejecutan **de a una** aunque el método acepte varias: si un script de 31
+sentencias falla, hay que poder decir en cuál.
+
 Los agregados se cachean una hora (`@st.cache_data`). Para forzar una
 relectura: tecla `C` en la app, o «Clear cache» en el menú.
 

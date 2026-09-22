@@ -57,12 +57,18 @@ if nuevo != activo:
             st.cache_data.clear()   # el caché está indexado por identificador
             st.rerun()
 
-st.markdown(
-    f'<p class="nota">Método que se usará para las sentencias sin retorno '
-    f'(drop, create, compute stats): <code>{data.metodo_ddl_detectado()}</code>. '
-    f'Se elige por introspección del helper, porque <code>obtener_dataframe</code> '
-    f'espera devolver filas y un DDL no devuelve nada.</p>',
-    unsafe_allow_html=True)
+# --- verificación del método, ANTES de cualquier cosa -----------------------
+# No es una línea informativa: si el helper no expone el método, reconstruir
+# deja las tablas borradas o a medias. Va arriba, en rojo, y bloquea los
+# botones.
+ddl_ok, ddl_msg = data.verificar_metodo_ddl()
+if ddl_ok:
+    st.markdown(
+        f'<p class="nota">Sentencias sin retorno (drop, create, compute stats) '
+        f'vía <code>{ddl_msg}</code>. Se ejecutan de a una para saber en cuál '
+        f'falla un script.</p>', unsafe_allow_html=True)
+else:
+    st.error(f"**No se puede reconstruir.**\n\n{ddl_msg}", icon="⛔")
 
 # ---------------------------------------------------------------------------
 # Estado actual
@@ -123,11 +129,19 @@ scripts = data.scripts_construccion()
 if not scripts:
     st.error(f"No hay scripts en {data.DIR_CONSTRUCCION}.")
     st.stop()
+if not ddl_ok:
+    st.info(
+        "Los botones de reconstruir están deshabilitados hasta que el helper "
+        "exponga el método de arriba. Consultar el estado sí funciona: eso son "
+        "consultas normales, que no pasan por ese método.")
 
 
 def ejecutar(rutas: list) -> None:
     """Corre los scripts en orden. Si uno falla, SE DETIENE: los que siguen
     pueden depender de él (04, 06, 07 y 08 leen de la tabla que crea 01)."""
+    if not ddl_ok:
+        st.error(f"No se puede reconstruir: {ddl_msg}", icon="⛔")
+        return
     barra = st.progress(0.0, text="Arrancando…")
     log = st.container()
     t0 = time.time()
@@ -163,7 +177,8 @@ c1, c2 = st.columns([1, 2])
 with c1:
     st.markdown("#### Todo, en orden")
     if not st.session_state.get("p9_confirmar"):
-        if st.button("Reconstruir todo", type="primary", key="p9_todo"):
+        if st.button("Reconstruir todo", type="primary", key="p9_todo",
+                     disabled=not ddl_ok):
             st.session_state["p9_confirmar"] = True
             st.rerun()
     else:
@@ -172,7 +187,8 @@ with c1:
             f'de <b>{activo}</b>, borrando las actuales.</p>',
             unsafe_allow_html=True)
         cc1, cc2 = st.columns(2)
-        if cc1.button("Sí, reconstruir", type="primary", key="p9_si"):
+        if cc1.button("Sí, reconstruir", type="primary", key="p9_si",
+                      disabled=not ddl_ok):
             st.session_state["p9_confirmar"] = False
             ejecutar(scripts)
         if cc2.button("Cancelar", key="p9_no"):
@@ -188,5 +204,5 @@ with c2:
     for ruta in scripts:
         dep = ruta.name.startswith(("04_", "06_", "07_", "08_"))
         etiqueta = f"{ruta.name}" + ("  · depende de 01" if dep else "")
-        if st.button(etiqueta, key=f"p9_{ruta.name}"):
+        if st.button(etiqueta, key=f"p9_{ruta.name}", disabled=not ddl_ok):
             ejecutar([ruta])

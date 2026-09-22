@@ -148,48 +148,69 @@ def _ejecutar(consulta: str, parametros: dict[str, str]) -> pd.DataFrame:
     return _con_reintento(lambda hp: hp.obtener_dataframe(consulta, parametros))
 
 
-# Métodos candidatos para DDL, en orden de preferencia. `obtener_dataframe`
-# espera devolver filas y un drop o un create no devuelven nada: según cómo
-# esté implementado, puede fallar o devolver vacío. No se pudo verificar qué
-# expone el helper -- no está instalado en el entorno donde se escribió esto --
-# así que se elige el primero que exista y, si no hay ninguno, se cae a
-# obtener_dataframe, que es el comportamiento anterior.
+# Método del helper para sentencias SIN retorno (drop, create table as,
+# compute stats). `obtener_dataframe` espera devolver filas y un DDL no devuelve
+# nada, así que no sirve.
 #
-# PENDIENTE: se sabe que el helper expone `ejecutar_consultas(...)`, pero no
-# con qué firma -- el plural sugiere que recibe una lista, y esta función pasa
-# UNA sentencia como string. No se agrega a la lista a ciegas: si acepta un
-# iterable, pasarle un string lo recorrería carácter a carácter. Confirmada la
-# firma, va primera acá (o se ajusta _ejecutar_ddl para pasarle una lista).
-_METODOS_DDL = ("ejecutar", "ejecutar_sentencia", "execute", "ejecutar_ddl")
+# UN nombre, no una lista de candidatos por introspección. Lo que había antes
+# probaba cuatro nombres y, si ninguno existía, se caía a `obtener_dataframe`:
+# ese respaldo silencioso es exactamente lo que esconde un nombre mal escrito
+# hasta que alguien mira los datos.
+#
+# El nombre es SINGULAR. Se escribió primero en plural y estaba mal; queda
+# anotado porque es el tercer nombre mal escrito de este repo -- antes fueron
+# `%advanced%` por `ADVANCE` y este mismo. No se puede inspeccionar la clase
+# desde fuera del banco (el paquete no está instalado), así que la defensa es
+# que el fallo se vea: si el helper no expone este método, la página de
+# Construcción lo dice arriba y en rojo antes de dejar reconstruir nada, y
+# lista los métodos que sí encontró. Ver verificar_metodo_ddl().
+#
+# Se corrige acá y en ningún otro lado.
+METODO_DDL = "ejecutar_consulta"
 
 
 def _ejecutar_ddl(sentencia: str) -> None:
-    """Ejecuta una sentencia SIN retorno (drop, create table as, compute stats).
+    """Ejecuta UNA sentencia sin retorno.
 
-    Si el helper resulta exponer otro nombre, se agrega a _METODOS_DDL y no hay
-    que tocar nada más."""
+    Una por llamada aunque el método aceptara varias: si un script de 31
+    sentencias falla, hay que poder decir en cuál. Mandarlas juntas devuelve un
+    error del lote y obliga a leer el .sql contando puntos y comas.
+    """
     def _correr(hp):
-        for nombre in _METODOS_DDL:
-            metodo = getattr(hp, nombre, None)
-            if callable(metodo):
-                metodo(sentencia)
-                return
-        hp.obtener_dataframe(sentencia, {})
+        metodo = getattr(hp, METODO_DDL, None)
+        if not callable(metodo):
+            raise AttributeError(_falta_metodo(hp))
+        metodo(sentencia)
 
     _con_reintento(_correr)
 
 
-def metodo_ddl_detectado() -> str:
-    """Qué método usaría _ejecutar_ddl. Lo muestra la página de
-    administración, para no tener que adivinarlo mirando el código."""
+def _falta_metodo(hp) -> str:
+    """El mensaje de un helper que no expone lo que esperamos. Se escribe una
+    vez y lo usan el fallo real y la verificación de la página."""
+    expuestos = sorted(n for n in dir(hp)
+                       if not n.startswith("_") and callable(getattr(hp, n, None)))
+    return (f"El helper no expone {type(hp).__name__}.{METODO_DDL}(), que es el "
+            f"método con el que este repo ejecuta las sentencias sin retorno "
+            f"(drop, create table as, compute stats). Métodos disponibles: "
+            f"{', '.join(expuestos) or 'ninguno'}. Corregir data.METODO_DDL.")
+
+
+def verificar_metodo_ddl() -> tuple[bool, str]:
+    """¿Se puede reconstruir? Devuelve (ok, mensaje).
+
+    Es una VERIFICACIÓN, no un dato informativo: si devuelve False la página de
+    Construcción no deja tocar los botones. Reconstruir con el método
+    equivocado deja las tablas borradas o a medias.
+    """
     try:
         hp = _helper()
     except Exception as e:
-        return f"no se pudo instanciar el helper: {e}"
-    for nombre in _METODOS_DDL:
-        if callable(getattr(hp, nombre, None)):
-            return f"Helper.{nombre}()"
-    return "Helper.obtener_dataframe() (no se encontró un método sin retorno)"
+        return False, (f"No se pudo instanciar el helper, así que no se puede "
+                       f"reconstruir: {type(e).__name__}: {e}")
+    if callable(getattr(hp, METODO_DDL, None)):
+        return True, f"{type(hp).__name__}.{METODO_DDL}()"
+    return False, _falta_metodo(hp)
 
 
 # ===========================================================================
