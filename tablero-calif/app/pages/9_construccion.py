@@ -224,7 +224,17 @@ def ejecutar(rutas: list) -> None:
         barra.progress((i - 1) / len(rutas), text=f"{ruta.name}…")
         ini = time.time()
         try:
-            n = data.construir(ruta)
+            r = data.construir(ruta)
+        except data.VerificacionFallida as e:
+            barra.empty()
+            log.error(
+                f"**`{ruta.name}` se abortó a propósito** después de "
+                f"{time.time() - ini:.1f} s: el dato no cuadra con lo "
+                f"declarado y la tabla habría salido equivocada. Se borró.\n\n"
+                f"Se detuvo acá: los scripts que siguen pueden depender de "
+                f"este.", icon="⛔")
+            log.code(str(e), language="text")
+            return
         except Exception as e:
             barra.empty()
             log.error(
@@ -235,8 +245,17 @@ def ejecutar(rutas: list) -> None:
             log.code(f"{type(e).__name__}: {e}", language="text")
             return
         log.markdown(
-            f'<p class="nota">✓ <b>{ruta.name}</b> — {n} sentencias, '
+            f'<p class="nota">✓ <b>{ruta.name}</b> — {r.sentencias} sentencias, '
             f'{time.time() - ini:.1f} s</p>', unsafe_allow_html=True)
+        if r.avisos:
+            log.warning(
+                f"**{ruta.name} construyó, con avisos.** No invalidan la "
+                f"tabla, pero hay que actualizar config/modelos.csv:\n\n"
+                + "\n".join(f"- {a}" for a in r.avisos))
+        if r.informativos:
+            log.markdown(
+                '<p class="nota">' + "<br>".join(r.informativos) + "</p>",
+                unsafe_allow_html=True)
     barra.progress(1.0, text="Listo")
     # Sin esto las otras páginas seguirían mostrando lo cacheado de antes.
     st.cache_data.clear()

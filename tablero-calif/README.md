@@ -25,7 +25,7 @@ done
 
 **Ningún script usa CTEs**: cada paso intermedio es una tabla física con
 prefijo `tmp_`, que se borra al final. Eso multiplica las sentencias — la
-construcción completa son **169** repartidas en once scripts, de 3 en los más
+construcción completa son **173** repartidas en once scripts, de 3 en los más
 simples a 31 en los de migración de PD. Si el cliente no acepta varias por
 llamada hay que separarlas por `;` y ejecutarlas en secuencia; `impala-shell -f`
 lo hace solo. El detalle por script está en `00_orden.md`.

@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import re
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
@@ -582,19 +582,144 @@ FAMILIA_PRODUCTO = {
     "sufi_veh": "sufi", "sufi_moto": "sufi", "sufi_cpe": "sufi", "sufi_con": "sufi",
 }
 
-# Modelos que devuelven puntaje 0-999. Espejo de la lista de
-# sql/20_construccion/05_pd_por_modelo.sql. Ver CLAUDE.md, "Modelos y su
-# escala".
-MODELOS_PUNTAJE = {"ADVANCE_1_1", "ADVANCE_INCLUSION"}
+# --- modelos: config/modelos.csv es la única lista ------------------------
+# Antes había tres copias: MODELOS_PUNTAJE y MODELOS_CONOCIDOS acá y un IN
+# literal en 05_pd_por_modelo.sql. Se desincronizaban, y el chequeo 3 marcaba
+# novedad todos los meses porque su copia tenía ocho de los doce modelos.
+#
+# Cuando entra un modelo nuevo se agrega UNA línea al CSV. Si alguien se
+# olvida, la verificación de la construcción lo atrapa (ver clasificar_modelos).
 
-# Los ocho modelos vigentes. Espejo de CLAUDE.md, "Modelos y su escala".
-# Un modelo fuera de esta lista no es un error: es una novedad que hay que
-# mirar, porque si viene en escala de puntaje hay que agregarlo a
-# MODELOS_PUNTAJE y a 05_pd_por_modelo.sql o sus bins salen mal sin síntoma.
-MODELOS_CONOCIDOS = {
-    "ADVANCE_1_1", "ADVANCE_INCLUSION", "T1_COMPORT", "T1_COMPORT_NEI",
-    "T1_COMPORT_SOCIAL", "T2", "T3_MARCAS", "T_2_3",
-}
+RUTA_MODELOS = Path(__file__).resolve().parent.parent / "config" / "modelos.csv"
+
+# Vocabulario del CSV -> vocabulario de las tablas. El CSV usa la palabra que
+# se dice en voz alta; las tablas conservan los valores que ya tenían, para no
+# tocar nada aguas abajo.
+ESCALAS = {"probabilidad": "probabilidad_0_1", "puntaje": "puntaje_0_999"}
+
+# Mismo criterio que {IDUNICO}: el nombre se interpola en un literal SQL, y
+# esta validación es la única defensa.
+_MODELO_VALIDO = re.compile(r"^[A-Za-z0-9_]+$")
+
+
+def leer_modelos(ruta: Path | None = None) -> pd.DataFrame:
+    """Lee y VALIDA config/modelos.csv. Devuelve (modelo, escala, escala_tabla).
+
+    Falla con un error que lista TODAS las líneas malas, no solo la primera:
+    arreglar de a una y volver a correr es la forma lenta de hacerlo.
+    """
+    ruta = ruta or RUTA_MODELOS
+    if not ruta.exists():
+        raise FileNotFoundError(f"No está {ruta}: es la lista de modelos y su "
+                                f"escala, sin ella no se puede construir.")
+    df = pd.read_csv(ruta, dtype=str, keep_default_na=False)
+    if list(df.columns) != ["modelo", "escala"]:
+        raise ValueError(f"{ruta.name}: las columnas tienen que ser exactamente "
+                         f"'modelo,escala'; son {list(df.columns)}.")
+    df = df.apply(lambda c: c.str.strip())
+    errores = []
+    for i, r in df.iterrows():
+        linea = i + 2          # +1 por el encabezado, +1 porque arranca en 1
+        if not r["modelo"]:
+            errores.append(f"línea {linea}: modelo vacío")
+        elif not _MODELO_VALIDO.match(r["modelo"]):
+            errores.append(f"línea {linea}: {r['modelo']!r} tiene caracteres "
+                           f"fuera de letras, números y guion bajo")
+        if r["escala"] not in ESCALAS:
+            errores.append(f"línea {linea}: escala {r['escala']!r}, tiene que "
+                           f"ser {' o '.join(ESCALAS)}")
+    dup = df.loc[df["modelo"].duplicated(keep=False) & (df["modelo"] != ""), "modelo"]
+    if not dup.empty:
+        errores.append(f"modelos repetidos: {sorted(set(dup))}")
+    if df.empty:
+        errores.append("el archivo no tiene ningún modelo")
+    if errores:
+        raise ValueError(f"{ruta.name} tiene errores:\n  - " + "\n  - ".join(errores))
+    df["escala_tabla"] = df["escala"].map(ESCALAS)
+    return df.reset_index(drop=True)
+
+
+def _sql_modelos_declarados(modelos: pd.DataFrame) -> str:
+    """El cuerpo de tmp_modelos, una fila por modelo. Los nombres ya pasaron
+    por leer_modelos(), que es lo que hace seguro interpolarlos."""
+    filas = [f"'{r.modelo}' as modelo, '{r.escala_tabla}' as escala"
+             if i == 0 else f"'{r.modelo}', '{r.escala_tabla}'"
+             for i, r in enumerate(modelos.itertuples())]
+    return ("          select " + filas[0] + "\n"
+            + "".join(f"union all select {f}\n" for f in filas[1:])).rstrip()
+
+
+def clasificar_modelos(observados: pd.DataFrame,
+                       declarados: pd.DataFrame) -> pd.DataFrame:
+    """Compara el rango de PD de cada modelo contra lo declarado en el CSV.
+
+    `observados` trae (modelo, pd_max) y opcionalmente pd_min; puede tener
+    varias filas por modelo (el perfilado viene por mes y producto): se toma el
+    máximo. Devuelve una fila por modelo con `severidad`:
+
+      falla  no declarado con PD > 1, o declarado como probabilidad con PD > 1.
+             Sus bins saldrían mal: la construcción de pd_por_modelo aborta.
+      aviso  no declarado con PD entre 0 y 1 -- un modelo nuevo que hay que
+             agregar al CSV; declarado como puntaje pero con PD <= 1 -- puede
+             haber cambiado de escala, y sus bins de 50 los mete todos en el
+             primero; o filas SIN modelo con PD > 1 -- su escala se asume
+             probabilidad y ahí no lo es.
+      info   declarado pero no aparece en la ventana.
+      ok     declarado y consistente.
+
+    Es la misma función para la construcción y para el chequeo 3 de Salud del
+    dato: la regla está una sola vez.
+    """
+    decl = dict(zip(declarados["modelo"], declarados["escala"]))
+    obs = observados.copy()
+    obs["modelo"] = obs["modelo"].where(obs["modelo"].notna(), None)
+    obs["modelo"] = obs["modelo"].map(
+        lambda m: None if m is None or str(m).strip() == "" else str(m).strip())
+    agg = {"pd_max": ("pd_max", "max")}
+    if "pd_min" in obs.columns:
+        agg["pd_min"] = ("pd_min", "min")
+    g = (obs.assign(_k=obs["modelo"].fillna("\x00"))
+         .groupby("_k", as_index=False).agg(**agg))
+    g["modelo"] = g["_k"].where(g["_k"] != "\x00", None)
+    filas = []
+    for r in g.itertuples():
+        m, pmax = r.modelo, float(r.pd_max) if pd.notna(r.pd_max) else None
+        esc = decl.get(m)
+        if m is None:
+            sev, mot = (("aviso", f"filas SIN modelo con PD hasta {pmax:g}: se "
+                         f"binean como probabilidad y no lo son")
+                        if pmax is not None and pmax > 1 else
+                        ("ok", "filas sin modelo; su escala se asume probabilidad"))
+        elif esc is None:
+            sev, mot = (("falla", f"no está en {RUTA_MODELOS.name} y su PD llega "
+                         f"a {pmax:g}: es de puntaje")
+                        if pmax is not None and pmax > 1 else
+                        ("aviso", f"no está en {RUTA_MODELOS.name}; su PD llega a "
+                         f"{pmax:g}, así que se trata como probabilidad. "
+                         f"Agregarlo al CSV"))
+        elif esc == "probabilidad" and pmax is not None and pmax > 1:
+            sev, mot = ("falla", f"declarado como probabilidad pero su PD llega "
+                        f"a {pmax:g}")
+        elif esc == "puntaje" and pmax is not None and pmax <= 1:
+            sev, mot = ("aviso", f"declarado como puntaje pero su PD no pasa de "
+                        f"{pmax:g}: ¿cambió de escala?")
+        else:
+            sev, mot = "ok", f"declarado como {esc}, consistente"
+        filas.append({"modelo": m if m is not None else "(sin modelo)",
+                      "escala_declarada": esc or "--", "pd_max": pmax,
+                      "severidad": sev, "motivo": mot})
+    vistos = {f["modelo"] for f in filas}
+    for m, esc in decl.items():
+        if m not in vistos:
+            filas.append({"modelo": m, "escala_declarada": esc, "pd_max": None,
+                          "severidad": "info",
+                          "motivo": "declarado, no aparece en los datos"})
+    orden = {"falla": 0, "aviso": 1, "info": 2, "ok": 3}
+    out = pd.DataFrame(filas, columns=["modelo", "escala_declarada", "pd_max",
+                                       "severidad", "motivo"])
+    return (out.assign(_o=out["severidad"].map(orden))
+            .sort_values(["_o", "modelo"]).drop(columns="_o")
+            .reset_index(drop=True))
 
 
 # --- construcción ----------------------------------------------------------
@@ -606,32 +731,113 @@ def scripts_construccion() -> list[Path]:
     return sorted(DIR_CONSTRUCCION.glob("*.sql"))
 
 
-def sentencias(ruta: Path, idu: str | None = None) -> list[str]:
-    """Parte un .sql en sentencias ejecutables.
+_MARCA_VERIFICACION = re.compile(r"^\s*--\s*@verificacion\s+(\w+)\s*$")
+_CENTINELA = "@@verificacion:"
 
-    Quita los comentarios de línea ANTES de partir por punto y coma. El orden
-    importa: estos archivos tienen encabezados largos, y un ';' dentro de un
-    comentario partiría la sentencia por la mitad y dejaría dos fragmentos
-    inválidos.
+
+class VerificacionFallida(RuntimeError):
+    """La construcción se detuvo a propósito: el dato no cuadra con lo
+    declarado y la tabla saldría equivocada."""
+
+
+@dataclass
+class ResultadoConstruccion:
+    sentencias: int
+    avisos: list[str] = field(default_factory=list)
+    informativos: list[str] = field(default_factory=list)
+
+
+def _resolver_marcadores(sql: str, idu: str | None) -> str:
+    sql = _resolver_idunico(sql, idu)
+    if "{MODELOS_DECLARADOS}" in sql:
+        sql = sql.replace("{MODELOS_DECLARADOS}",
+                          _sql_modelos_declarados(leer_modelos()))
+    return sql
+
+
+def pasos(ruta: Path, idu: str | None = None) -> list[str]:
+    """Las sentencias de un script, más las verificaciones marcadas.
+
+    Una verificación se marca con una línea `-- @verificacion <nombre>` y
+    aparece en la lista como `@@verificacion:<nombre>`. Va como comentario
+    para que el archivo siga siendo SQL válido.
+
+    Quita los comentarios de línea ANTES de partir por punto y coma: estos
+    archivos tienen encabezados largos, y un ';' dentro de un comentario
+    partiría la sentencia por la mitad.
+
+    Todo se resuelve ANTES de ejecutar nada: un CSV de modelos mal escrito
+    falla acá, antes del primer drop, y no deja el script a medias.
     """
-    crudo = ruta.read_text(encoding="utf-8")
-    codigo = "\n".join(l for l in crudo.splitlines()
+    lineas = []
+    for l in ruta.read_text(encoding="utf-8").splitlines():
+        m = _MARCA_VERIFICACION.match(l)
+        if m:
+            lineas.append(f"{_CENTINELA}{m.group(1)};")
+        elif not l.strip().startswith("--"):
+            lineas.append(l)
+    return [p.strip() if p.strip().startswith(_CENTINELA)
+            else _resolver_marcadores(p.strip(), idu)
+            for p in "\n".join(lineas).split(";") if p.strip()]
+
+
+def sentencias(ruta: Path, idu: str | None = None) -> list[str]:
+    """Solo el SQL, sin las verificaciones."""
+    return [p for p in pasos(ruta, idu) if not p.startswith(_CENTINELA)]
+
+
+def _verificar_modelos(idu: str | None) -> tuple[list[str], list[str], list[str]]:
+    """(fallas, avisos, informativos) de la escala de modelos, sobre
+    tmp_pd_escalado de la construcción en curso."""
+    ruta = DIR_CONSTRUCCION / "verificaciones" / "modelos.sql"
+    codigo = "\n".join(l for l in ruta.read_text(encoding="utf-8").splitlines()
                        if not l.strip().startswith("--"))
-    return [_resolver_idunico(p.strip(), idu)
-            for p in codigo.split(";") if p.strip()]
+    obs = _ejecutar(_resolver_idunico(codigo.strip().rstrip(";"), idu), {})
+    c = clasificar_modelos(obs, leer_modelos())
+    fila = lambda r: f"{r.modelo}: {r.motivo}"
+    return ([fila(r) for r in c.itertuples() if r.severidad == "falla"],
+            [fila(r) for r in c.itertuples() if r.severidad == "aviso"],
+            [fila(r) for r in c.itertuples() if r.severidad == "info"])
 
 
-def construir(ruta: Path, idu: str | None = None) -> int:
-    """Ejecuta un script de construcción. Devuelve cuántas sentencias corrió.
+_VERIFICACIONES = {"modelos": _verificar_modelos}
+
+
+def construir(ruta: Path, idu: str | None = None) -> ResultadoConstruccion:
+    """Ejecuta un script de construcción.
 
     Las sentencias van EN SECUENCIA, una llamada por cada una: no se asume que
-    el helper acepte varias juntas. Si alguna falla, la excepción sube sin
-    tocar: quien llama decide si sigue o se detiene."""
-    ejecutadas = 0
-    for s in sentencias(ruta, idu):
-        _ejecutar_ddl(s)
-        ejecutadas += 1
-    return ejecutadas
+    el helper acepte varias juntas, y así un fallo dice en cuál fue. Si alguna
+    falla, la excepción sube sin tocar: quien llama decide si sigue.
+
+    Si una VERIFICACIÓN falla, ejecuta todos los `drop` del script -- tabla
+    final incluida -- y levanta VerificacionFallida. Es mejor no tener la tabla
+    que tenerla equivocada: una tabla que no existe se nota en la primera
+    página que la lee; una con los bins mal, no.
+    """
+    todos = pasos(ruta, idu)
+    res = ResultadoConstruccion(0)
+    for p in todos:
+        if p.startswith(_CENTINELA):
+            nombre = p[len(_CENTINELA):]
+            fallas, avisos, info = _VERIFICACIONES[nombre](idu)
+            res.avisos += avisos
+            res.informativos += info
+            if fallas:
+                drops = [s for s in todos if s.lower().startswith("drop table")]
+                for d in drops:
+                    _ejecutar_ddl(d)
+                raise VerificacionFallida(
+                    f"{ruta.name}: la verificación de {nombre} falló y la "
+                    f"construcción se abortó.\n  - " + "\n  - ".join(fallas)
+                    + f"\nSe ejecutaron los {len(drops)} drop del script, tabla "
+                    f"final incluida: mejor no tenerla que tenerla con los bins "
+                    f"mal. Corregir {RUTA_MODELOS.relative_to(RUTA_MODELOS.parent.parent)} "
+                    f"y reconstruir.")
+            continue
+        _ejecutar_ddl(p)
+        res.sentencias += 1
+    return res
 
 
 TABLAS_CONSTRUIDAS = [

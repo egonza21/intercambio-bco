@@ -57,10 +57,12 @@ else:
         ejecutado=False))
 
 nulos = data.nulos_pd_vs_grupo(desde, hasta)
+# Contra config/modelos.csv, con la MISMA regla que usa la construcción de
+# pd_por_modelo: data.clasificar_modelos().
 resultados.append(charts.chequeo_dominio(
     data.dominio_grupos(desde, hasta),
-    data.escala_modelos(desde, hasta),
-    data.MODELOS_CONOCIDOS))
+    data.clasificar_modelos(data.escala_modelos(desde, hasta),
+                            data.leer_modelos())))
 resultados.append(charts.chequeo_pd_grupo(nulos))
 
 # ---------------------------------------------------------------------------
@@ -90,8 +92,8 @@ for c in resultados:
     st.markdown(f'<p class="sub">{c.resumen}</p>', unsafe_allow_html=True)
     if c.nota:
         st.markdown(f'<p class="nota">{c.nota}</p>', unsafe_allow_html=True)
-    # El detalle solo se despliega si el chequeo falla.
-    if c.ejecutado and not c.ok and c.detalle is not None and not c.detalle.empty:
+    # El detalle solo se despliega si el chequeo falla o avisa.
+    if c.tiene_detalle:
         with st.expander(f"Ver el detalle ({len(c.detalle)} filas)"):
             st.dataframe(c.detalle, use_container_width=True, hide_index=True)
             st.download_button(

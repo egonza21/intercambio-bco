@@ -183,7 +183,7 @@ todos los intermedios en memoria dentro de un solo plan. Con tablas físicas
 cada paso va a disco, y el `compute stats` de cada una le da al planificador
 los tamaños reales **antes** del paso que la consume.
 
-El costo es que hay muchas más sentencias: la construcción completa son **169**
+El costo es que hay muchas más sentencias: la construcción completa son **173**
 repartidas en once scripts, de 3 en los más simples a 31 en los de migración de
 PD. El log de la página de Construcción las muestra por script, no por
 sentencia.
@@ -495,67 +495,81 @@ alfabética que numéricamente.
   (escala 0 a 999), mientras el resto usa 0 a 1. La traducción a
   `grupo`/`grupo_base` sí llega normalizada a G1-G8 vía tablas traductoras
   externas. Cualquier histograma o cálculo de PSI sobre `pd` debe segmentar
-  por `modelo`, no asumir una escala [0,1] uniforme. Ver "Modelos en escala de
-  puntaje".
+  por `modelo`, no asumir una escala [0,1] uniforme. Ver "Modelos y su
+  escala".
 
 ## Modelos y su escala
 
-### Los ocho modelos vigentes
+### Los modelos y su escala viven en `config/modelos.csv`
 
-Verificado 2026-09-01. Son los modelos vigentes en todo el proceso de
-calificación, y **aplican a los 16 productos**, no a un subconjunto: el mismo
-modelo puede aparecer en cualquiera de las columnas `modelo_*`.
+**Es la única lista de modelos del repo.** Antes había tres copias —
+`MODELOS_PUNTAJE` y `MODELOS_CONOCIDOS` en `data.py` y un `IN (...)` literal en
+`05_pd_por_modelo.sql`— que se desincronizaban: el chequeo 3 de Salud del dato
+marcaba novedad todos los meses porque su copia tenía ocho modelos y el dato,
+doce. Un chequeo que salta siempre se deja de mirar.
 
-| modelo              | escala de `pd`   |
-|---------------------|------------------|
-| `ADVANCE_1_1`       | puntaje 0–999    |
-| `ADVANCE_INCLUSION` | puntaje 0–999    |
-| `T1_COMPORT`        | probabilidad 0–1 |
-| `T1_COMPORT_NEI`    | probabilidad 0–1 |
-| `T1_COMPORT_SOCIAL` | probabilidad 0–1 |
-| `T2`                | probabilidad 0–1 |
-| `T3_MARCAS`         | probabilidad 0–1 |
-| `T_2_3`             | probabilidad 0–1 |
+```
+modelo,escala
+ADVANCE_1_1,puntaje
+ADVANCE_INCLUSION,puntaje
+T1_COMPORT,probabilidad
+…
+```
 
-Además existe un **valor vacío o nulo** en `modelo_*`. No es un noveno modelo:
-es la ausencia de modelo. Ver "El modelo vacío" más abajo.
+Los modelos **aplican a los 16 productos**, no a un subconjunto: el mismo
+modelo puede aparecer en cualquiera de las columnas `modelo_*`. Es consistente
+con que solo haya dos PD (ver "La PD no es por producto"): el modelo es un
+atributo del cliente, igual que la PD.
 
-> **PENDIENTE 2026-09-01: la lista de ocho puede estar incompleta.** En las
-> leyendas del tablero aparecieron `T2_HIP`, `T3_HIP`, `T3_SOCIAL` y
-> `T2_SOCIAL`, que no están acá. No se sabe todavía si son modelos reales, o
-> variantes de los ocho, o restos de una carga vieja. **Hasta confirmarlo, la
-> lista de escala de `pd_por_modelo.sql` no se toca**: ninguno de esos cuatro
-> parece de puntaje, pero si alguno lo fuera sus bins saldrían mal sin dar
-> síntoma. El chequeo 3 de la página de salud del dato ya los lista.
+Hoy son doce. Los ocho originales se verificaron el 2026-09-01. **`T2_HIP`,
+`T3_HIP`, `T3_SOCIAL` y `T2_SOCIAL` están declarados como probabilidad por
+supuesto, no por verificación**: aparecieron en las leyendas del tablero y
+ninguno parecía de puntaje. Si alguno lo fuera, la verificación lo marca en la
+primera construcción — ver abajo.
 
-Que los ocho apliquen a todos los productos es consistente con que solo haya
-dos PD (ver "La PD no es por producto"): el modelo es un atributo del cliente,
-igual que la PD, y las 16 columnas `modelo_*` son la misma información
-replicada por familia.
+Además existe un **valor vacío o nulo** en `modelo_*`. No es un modelo más: es
+la ausencia de modelo, y no va en el CSV. Ver "El modelo vacío".
 
-### La escala es un mapeo manual
+### Cuando entra un modelo nuevo: una línea en el CSV
 
-Solo los dos `ADVANCE_*` devuelven puntaje; los otros seis devuelven
-probabilidad. Esa clasificación vive en el `CASE` de `escala` en
-`sql/20_construccion/05_pd_por_modelo.sql` y **es un mapeo manual**: no hay
-nada en
-la tabla que marque la escala de un modelo, hay que saberlo y escribirlo.
+Nada más. `05_pd_por_modelo.sql` construye `tmp_modelos_{IDUNICO}` a partir del
+CSV (marcador `{MODELOS_DECLARADOS}`, que resuelve la app) y hace `left join`
+contra ella; `data.py` y el chequeo 3 leen el mismo archivo.
 
-**Hay que actualizarla cuando entre un modelo nuevo en escala de puntaje.**
+Cada nombre se **valida antes de interpolarlo al SQL**: solo letras, números y
+guion bajo, el mismo criterio que `{IDUNICO}`. La escala tiene que ser
+`probabilidad` o `puntaje`. Un CSV mal escrito falla antes del primer `drop`, y
+el error lista todas las líneas malas, no solo la primera.
 
-### El síntoma de olvidarlo no es un error
+### Si alguien se olvida, la construcción lo atrapa
 
-Un modelo de puntaje que no esté en la lista queda etiquetado
-`probabilidad_0_1` y sus valores de 0 a 999 se binean con la escala
-logarítmica pensada para probabilidades. La query corre, devuelve filas, y no
-avisa nada. Lo que se ve es **un histograma con bins absurdos**: el modelo
-nuevo aterriza en índices de bin positivos, junto a los negativos de las PD
-reales, en el mismo eje y bajo la misma etiqueta de escala. Si aparece eso,
-revisar esta lista antes que cualquier otra cosa.
+Antes, el síntoma de olvidar un modelo de puntaje **no era un error**: quedaba
+etiquetado `probabilidad_0_1`, sus valores de 0 a 999 se bineaban con la escala
+logarítmica, la query corría y lo único que se veía era un histograma con bins
+absurdos.
 
-`sql/00_perfilado/dominio_grupos_y_escala_pd.sql` es la query que lo detecta a
-tiempo: si el `pd_max` de algún modelo pasa de 1 y no está acá, falta
-agregarlo. Vale correrla cuando cambie la vigencia de modelos.
+Ahora, apenas existe `tmp_pd_escalado`, la app compara la PD de cada modelo
+contra lo declarado (marcador `-- @verificacion modelos` en el SQL; la regla
+está en `data.clasificar_modelos`, que usa también el chequeo 3). La severidad
+va según el daño:
+
+| caso | qué pasa |
+|---|---|
+| no declarado, PD entre 0 y 1 | **aviso** en Salud del dato y en Construcción; la construcción sigue |
+| no declarado, PD > 1 | **la construcción falla** |
+| declarado como probabilidad, PD > 1 | **la construcción falla** |
+| declarado como puntaje, PD ≤ 1 | aviso: puede haber cambiado de escala |
+| filas sin modelo con PD > 1 | aviso: su escala se asume probabilidad |
+| declarado que no aparece en la ventana | informativo |
+
+Cuando falla, el mensaje dice qué modelo y qué máximo de PD encontró, y la app
+ejecuta **todos los `drop` del script, tabla final incluida**. Es mejor no
+tener `pd_por_modelo` que tenerla con los bins mal: una tabla que no existe se
+nota en la primera página que la lee; una equivocada, no.
+
+La verificación vive en la app, no en el SQL — Impala no tiene `ASSERT` ni
+`RAISE`. Por eso `05_pd_por_modelo.sql` **no se puede correr a mano** con
+`impala-shell` tal cual está: se corre desde la página de Construcción.
 
 ### Por qué una lista y no un patrón
 
@@ -625,7 +639,7 @@ El perfilado va primero porque su resultado cambia el resto del código.
    **Resuelto 2026-08-25: no, y el eje no es el producto sino el modelo.**
    `ADVANCE_1_1` y `ADVANCE_INCLUSION` devuelven `pd` en escala 0-999; el
    resto en 0-1. Cualquier histograma o PSI sobre `pd` debe segmentar por
-   `modelo`. Ver "Modelos en escala de puntaje".
+   `modelo`. Ver "Modelos y su escala".
 6. **Confirmar los valores de `familia_producto`** con la clasificación oficial
    de productos del banco. Sigue abierto — se confirma más adelante. Por
    ahora se sigue usando la propuesta de la tabla "Mapeo idx → producto" tal

@@ -30,24 +30,41 @@ class Chequeo:
     detalle: pd.DataFrame | None = None
     nota: str = ""
     ejecutado: bool = True
+    # Pasó, pero hay algo que mirar que NO invalida los números: un modelo
+    # nuevo con PD entre 0 y 1, por ejemplo. Es un cuarto estado y no un
+    # "casi OK": si se pintara verde nadie lo abriría, y si se pintara rojo
+    # el chequeo saltaría por cosas que no rompen nada y se dejaría de mirar.
+    aviso: bool = False
 
     @property
     def estado(self) -> str:
         if not self.ejecutado:
             return "SIN EJECUTAR"
-        return "OK" if self.ok else "REVISAR"
+        if not self.ok:
+            return "REVISAR"
+        return "AVISO" if self.aviso else "OK"
 
     @property
     def color(self) -> str:
         if not self.ejecutado:
             return theme.INK_MUTED
-        return theme.ESTADO_OK if self.ok else theme.ESTADO_CRITICO
+        if not self.ok:
+            return theme.ESTADO_CRITICO
+        return theme.ESTADO_ALERTA if self.aviso else theme.ESTADO_OK
 
     @property
     def icono(self) -> str:
         if not self.ejecutado:
             return "○"
-        return "●" if self.ok else "▲"
+        if not self.ok:
+            return "▲"
+        return "◆" if self.aviso else "●"
+
+    @property
+    def tiene_detalle(self) -> bool:
+        """El detalle se despliega si falla O si avisa."""
+        return (self.ejecutado and (not self.ok or self.aviso)
+                and self.detalle is not None and not self.detalle.empty)
 
 
 def resumen_global(chequeos: list[Chequeo]) -> tuple[str, str, bool]:
@@ -61,6 +78,7 @@ def resumen_global(chequeos: list[Chequeo]) -> tuple[str, str, bool]:
     total = len(chequeos)
     fallan = [c for c in chequeos if c.ejecutado and not c.ok]
     sin_correr = [c for c in chequeos if not c.ejecutado]
+    avisan = [c for c in chequeos if c.ejecutado and c.ok and c.aviso]
     pasan = total - len(fallan) - len(sin_correr)
 
     if fallan:
@@ -75,6 +93,11 @@ def resumen_global(chequeos: list[Chequeo]) -> tuple[str, str, bool]:
                 f"ejecutar ({', '.join(c.nombre for c in sin_correr)}). "
                 f"Mientras no corra, no hay nada verificado sobre ese punto.",
                 False)
+    if avisan:
+        return ("aviso",
+                f"Los {total} chequeos pasan, {len(avisan)} con avisos "
+                f"({', '.join(c.nombre for c in avisan)}). No invalidan los "
+                f"números, pero hay algo que actualizar.", False)
     return ("ok", f"Los {total} chequeos pasan. Los supuestos sobre los que se "
             f"apoya el resto del tablero se sostienen en esta ventana.", True)
 
@@ -131,62 +154,79 @@ def chequeo_mapeo(df: pd.DataFrame) -> Chequeo:
         f"equivocado.", malos, nota=nota)
 
 
-def chequeo_dominio(grupos: pd.DataFrame, modelos: pd.DataFrame,
-                    conocidos: set[str]) -> Chequeo:
-    """3. Dominio de grupos y modelos sin novedades."""
+def chequeo_dominio(grupos: pd.DataFrame,
+                    modelos: pd.DataFrame) -> Chequeo:
+    """3. Dominio de grupos y escala de modelos.
+
+    `modelos` es la salida de data.clasificar_modelos(): la MISMA regla que
+    usa la construcción de pd_por_modelo, contra config/modelos.csv. Antes
+    comparaba contra una lista de ocho en data.py, y como los modelos reales
+    eran doce, marcaba novedad todos los meses. Un chequeo que salta siempre
+    se deja de mirar, y entonces tampoco se mira el mes que importa.
+
+    Severidades:
+      REVISAR  grupo fuera del dominio, o un modelo cuya escala no cuadra con
+               lo declarado (sus bins de PD salen mal).
+      AVISO    modelo nuevo con PD entre 0 y 1, u otra cosa que pide
+               actualizar el CSV pero no rompe los números.
+      OK       lo demás. Los declarados que no aparecen van como nota.
+    """
     esperados = set(theme.GRUPOS_ORDENADOS)
     g_raros = pd.DataFrame()
     if not grupos.empty:
         g_raros = grupos[~grupos["grupo"].isin(esperados)]
 
-    m_raros = pd.DataFrame()
-    if not modelos.empty:
-        m = modelos.copy()
-        m["modelo"] = m["modelo"].fillna("").str.strip()
-        # El modelo vacío es conocido: es ausencia de modelo, no una novedad.
-        m_raros = (m[(m["modelo"] != "") & (~m["modelo"].isin(conocidos))]
-                   .groupby("modelo", as_index=False)
-                   .agg(productos=("producto", "nunique"),
-                        pd_min=("pd_min", "min"), pd_max=("pd_max", "max"),
-                        desde=("mes", "first")))
+    m = modelos if modelos is not None else pd.DataFrame(
+        columns=["modelo", "severidad", "motivo"])
+    fallas = m[m["severidad"] == "falla"]
+    avisos = m[m["severidad"] == "aviso"]
+    ausentes = m[m["severidad"] == "info"]
+    declarados = int((m["escala_declarada"] != "--").sum()) if not m.empty else 0
 
-    if g_raros.empty and m_raros.empty:
+    nota = ""
+    if not ausentes.empty:
+        nota = (f"Declarados en config/modelos.csv que no aparecen en esta "
+                f"ventana: {', '.join(ausentes['modelo'])}. No es un problema: "
+                f"puede ser un modelo que ya no está vigente.")
+
+    def _lista(df):
+        return "; ".join(f"**{r.modelo}** — {r.motivo}" for r in df.itertuples())
+
+    if g_raros.empty and fallas.empty and avisos.empty:
         return Chequeo(
-            "Dominio de grupos y modelos sin novedades", True,
+            "Dominio de grupos y escala de modelos", True,
             f"Los grupos caen todos dentro de G1–G8 y las seis aperturas de "
-            f"sufi. Los modelos son los {len(conocidos)} conocidos.")
+            f"sufi. Cada modelo tiene la escala que declara config/modelos.csv "
+            f"({declarados} declarados).", nota=nota)
 
-    # Los modelos desconocidos se listan SIEMPRE en el resumen, no solo en el
-    # detalle desplegable: son el dato accionable. Al 2026-09-01 ya se vieron
-    # T2_HIP, T3_HIP, T3_SOCIAL y T2_SOCIAL en las leyendas, que no están en la
-    # lista de ocho de CLAUDE.md. Pendiente de confirmar cuáles son los reales.
-    nombres_raros = sorted(m_raros["modelo"].tolist()) if not m_raros.empty else []
-
-    partes, detalle = [], []
+    detalle = []
     if not g_raros.empty:
-        partes.append(f"{g_raros['grupo'].nunique()} valores de grupo fuera de "
-                      f"G1–G8 y las aperturas conocidas")
         detalle.append(g_raros.assign(hallazgo="grupo desconocido"))
-    if not m_raros.empty:
-        escala = m_raros[m_raros["pd_max"] > 1]
-        partes.append(f"{len(m_raros)} modelos que no están en la lista")
-        if not escala.empty:
-            partes.append(
-                f"y {len(escala)} de ellos vienen en escala de PUNTAJE "
-                f"(pd_max > 1): hay que agregarlos a la lista de "
-                f"pd_por_modelo.sql o sus bins salen mal sin dar síntoma")
-        detalle.append(m_raros.assign(hallazgo="modelo desconocido"))
+    if not fallas.empty or not avisos.empty:
+        detalle.append(pd.concat([fallas, avisos]).assign(hallazgo="modelo"))
+    det = pd.concat(detalle, ignore_index=True) if detalle else None
 
-    resumen = "Aparecieron " + ", ".join(partes) + "."
-    if nombres_raros:
-        resumen += (" Los modelos fuera de la lista son: "
-                    + ", ".join(f"**{m}**" for m in nombres_raros) + ".")
-    resumen += (" Un modelo nuevo no es un error en sí: es una novedad que hay "
-                "que mirar antes de confiar en el histograma de PD, y que hay "
-                "que reflejar en la lista de CLAUDE.md.")
+    if not g_raros.empty or not fallas.empty:
+        partes = []
+        if not g_raros.empty:
+            partes.append(f"{g_raros['grupo'].nunique()} valores de grupo fuera "
+                          f"de G1–G8 y las aperturas conocidas")
+        if not fallas.empty:
+            partes.append(f"{len(fallas)} modelos con una escala que no cuadra "
+                          f"con lo declarado: {_lista(fallas)}. Sus bins de PD "
+                          f"salen mal, y la construcción de pd_por_modelo se "
+                          f"aborta hasta corregir el CSV")
+        if not avisos.empty:
+            partes.append(f"además, {len(avisos)} avisos: {_lista(avisos)}")
+        return Chequeo("Dominio de grupos y escala de modelos", False,
+                       "Hay " + "; ".join(partes) + ".", det, nota=nota)
+
     return Chequeo(
-        "Dominio de grupos y modelos sin novedades", False, resumen,
-        pd.concat(detalle, ignore_index=True) if detalle else None)
+        "Dominio de grupos y escala de modelos", True,
+        f"Los grupos están bien y ningún modelo rompe su escala, pero hay "
+        f"{len(avisos)} {'aviso' if len(avisos) == 1 else 'avisos'}: "
+        f"{_lista(avisos)}. Si es un modelo nuevo, se agrega una línea a "
+        f"config/modelos.csv.", det, nota=nota, aviso=True)
 
 
 def chequeo_pd_grupo(df: pd.DataFrame) -> Chequeo:

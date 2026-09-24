@@ -149,14 +149,14 @@ Importa para leer el log de la página de Construcción:
 | 02_base_clientes | 3 | 0 |
 | 03_cobertura_producto | 3 | 0 |
 | 04_distribucion_grupo | 3 | 0 |
-| 05_pd_por_modelo | 23 | 5 |
+| 05_pd_por_modelo | 27 | 6 |
 | 06_cortes_por_producto | 7 | 1 |
 | 07_migracion_r1 | 23 | 5 |
 | 08_migracion_r6 | 23 | 5 |
 | 09_migracion_pd_r1 | 31 | 7 |
 | 10_migracion_pd_r6 | 31 | 7 |
 | 11_puente_base | 11 | 2 |
-| **total** | **169** | **34** |
+| **total** | **173** | **35** |
 
 **El `compute stats` de cada intermedia va antes del join que la usa.** No es
 higiene: es buena parte de la ganancia. Con estadísticas Impala conoce los

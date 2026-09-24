@@ -216,11 +216,11 @@ def construir(desde: int, hasta: int, mes: int, rezago: int,
         charts.chequeo_mapeo(data.validacion_mapeo(mes, mes)),
     ]
     chequeos.append(charts.chequeo_dominio(
-        data.dominio_grupos(desde, hasta), data.escala_modelos(desde, hasta),
-        data.MODELOS_CONOCIDOS))
+        data.dominio_grupos(desde, hasta),
+        data.clasificar_modelos(data.escala_modelos(desde, hasta),
+                                data.leer_modelos())))
     chequeos.append(charts.chequeo_pd_grupo(nulos))
 
-    fallan = [c for c in chequeos if c.ejecutado and not c.ok]
     nivel, mensaje, _ = charts.resumen_global(chequeos)
     doc.seccion("salud", "Salud del dato",
                 "Estado de los chequeos de sql/00_perfilado/ al momento de "
@@ -235,10 +235,12 @@ def construir(desde: int, hasta: int, mes: int, rezago: int,
         f'<div class="banda" style="background:{fondo};border:1px solid {borde};'
         f'color:{tinta}"><b>{mensaje}</b></div>')
     doc.semaforo(chequeos)
-    for c in fallan:
-        if c.detalle is not None and not c.detalle.empty:
+    for c in chequeos:
+        if c.tiene_detalle:
             doc.sub(f"Detalle · {c.nombre}")
             doc.tabla(c.detalle, maximo=15)
+        if c.nota:
+            doc.nota(f"{c.nombre}: {c.nota}")
     doc.sub("Discordancia entre PD y grupo, mes a mes")
     doc.figura(charts.discordancia_pd_grupo(nulos))
     doc.nota("Es el único de los cuatro chequeos donde la tendencia dice algo. "

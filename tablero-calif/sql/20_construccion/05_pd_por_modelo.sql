@@ -14,8 +14,21 @@
 -- Bins logarítmicos para probabilidad (20 por década) y lineales de 50 para
 -- puntaje. Bordes FIJOS: condición para que el PSI signifique algo.
 --
--- La escala sale de una LISTA EXPLÍCITA de modelos, que hay que actualizar
--- cuando entre uno nuevo de puntaje. Ver CLAUDE.md, "Modelos y su escala".
+-- La escala sale de config/modelos.csv, que es la ÚNICA lista de modelos del
+-- repo: antes estaba acá como un IN literal y otra vez en data.py, y las dos
+-- se desincronizaban. La app convierte el CSV en tmp_modelos al construir
+-- (marcador {MODELOS_DECLARADOS}, paso 0) y valida cada nombre antes de
+-- interpolarlo: solo letras, números y guion bajo, como {IDUNICO}.
+--
+-- Un modelo que no esté en el CSV cae a probabilidad_0_1. Eso ya no pasa en
+-- silencio: después del paso 4 la app verifica la escala contra el dato (ver
+-- el marcador @verificacion) y, si un modelo trae PD mayor a 1 sin estar
+-- declarado como puntaje, la construcción FALLA y borra la tabla. Ver
+-- CLAUDE.md, "Modelos y su escala".
+--
+-- Este script NO se puede correr a mano con impala-shell tal cual está: los
+-- marcadores {IDUNICO} y {MODELOS_DECLARADOS} los resuelve la app, y la
+-- verificación también. Correrlo desde la página de Construcción.
 --
 -- ----------------------------------------------------------------------------
 -- SIN CTEs: cada paso intermedio es una tabla física
@@ -30,6 +43,7 @@
 -- del arranque limpian las que hayan quedado de una corrida interrumpida.
 -- ============================================================================
 
+drop table if exists proceso.tmp_modelos_{IDUNICO} purge;
 drop table if exists proceso.tmp_pd_series_{IDUNICO} purge;
 drop table if exists proceso.tmp_pd_cliente_{IDUNICO} purge;
 drop table if exists proceso.tmp_pd_larga_{IDUNICO} purge;
@@ -37,6 +51,17 @@ drop table if exists proceso.tmp_pd_escalado_{IDUNICO} purge;
 drop table if exists proceso.tmp_pd_binned_{IDUNICO} purge;
 
 -- --- 1. las dos series -------------------------------------------------------
+-- --- 0. modelos declarados, desde config/modelos.csv --------------------------
+-- La app reemplaza el marcador por un `select ... union all select ...` con
+-- una fila por modelo: (modelo, escala) con escala ya en el vocabulario de la
+-- tabla, 'probabilidad_0_1' o 'puntaje_0_999'.
+create table proceso.tmp_modelos_{IDUNICO}
+stored as parquet
+as
+{MODELOS_DECLARADOS};
+
+compute stats proceso.tmp_modelos_{IDUNICO};
+
 create table proceso.tmp_pd_series_{IDUNICO}
 stored as parquet
 as
@@ -123,13 +148,22 @@ select
     l.serie_pd,
     l.modelo,
     l.pd,
-    case when l.modelo in ('ADVANCE_1_1', 'ADVANCE_INCLUSION')
-         then 'puntaje_0_999'
-         else 'probabilidad_0_1' end as escala
+    -- Un modelo sin declarar cae a probabilidad. La verificación de abajo es
+    -- lo que impide que eso esconda un modelo de puntaje.
+    coalesce(m.escala, 'probabilidad_0_1') as escala
   from proceso.tmp_pd_larga_{IDUNICO} l
+  left join proceso.tmp_modelos_{IDUNICO} m
+    on m.modelo = l.modelo
   where l.pd is not null;
 
 compute stats proceso.tmp_pd_escalado_{IDUNICO};
+
+-- @verificacion modelos
+-- La app corre sql/20_construccion/verificaciones/modelos.sql sobre
+-- tmp_pd_escalado y compara la PD de cada modelo contra lo declarado. Si un
+-- modelo trae PD > 1 sin estar declarado como puntaje, ABORTA acá: ejecuta
+-- todos los drop de este script, incluida la tabla final, y no construye nada.
+-- Es mejor no tener la tabla que tenerla con los bins mal.
 
 -- --- 5. bin de cada fila -----------------------------------------------------
 create table proceso.tmp_pd_binned_{IDUNICO}
@@ -191,6 +225,7 @@ group by
 compute stats proceso.pd_por_modelo_{IDUNICO};
 
 -- --- 7. limpieza -------------------------------------------------------------
+drop table if exists proceso.tmp_modelos_{IDUNICO} purge;
 drop table if exists proceso.tmp_pd_series_{IDUNICO} purge;
 drop table if exists proceso.tmp_pd_cliente_{IDUNICO} purge;
 drop table if exists proceso.tmp_pd_larga_{IDUNICO} purge;
