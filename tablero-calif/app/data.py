@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import re
 import threading
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
@@ -641,6 +642,24 @@ TABLAS_CONSTRUIDAS = [
 ]
 
 
+# Tablas cuyo full outer join desplaza el lado origen `+rezago` y deja, al
+# final, meses que todavía no existen hechos SOLO de salidas: los clientes del
+# último mes real "salen" hacia un mes futuro que no llegó. migracion_r1,
+# migracion_pd_r1 y puente_base llegan a último+1; las r6, a último+6. El
+# último mes real de estas es el último con alguna fila que no sea salida.
+#
+# Sin esto, "hasta qué mes llega" cada tabla daba meses del futuro y el aviso
+# de "las tablas no llegan todas al mismo mes" saltaba siempre.
+_TABLAS_CON_SALIDA_FUTURA = {"migracion_r1", "migracion_r6", "migracion_pd_r1",
+                             "migracion_pd_r6", "puente_base"}
+
+
+def _expr_ultimo_mes(nombre: str) -> str:
+    if nombre in _TABLAS_CON_SALIDA_FUTURA:
+        return "max(case when categoria <> 'salida' then idx_mes end)"
+    return "max(idx_mes)"
+
+
 def estado_tabla(nombre: str, idu: str | None = None) -> dict:
     """Existe, cuántas filas y hasta qué mes llega. Una consulta por tabla.
 
@@ -650,7 +669,8 @@ def estado_tabla(nombre: str, idu: str | None = None) -> dict:
     tabla = f"{ESQUEMA}.{nombre}_{idu}"
     try:
         df = _ejecutar(
-            f"select count(*) as filas, max(idx_mes) as ult_mes from {tabla}", {})
+            f"select count(*) as filas, {_expr_ultimo_mes(nombre)} as ult_mes "
+            f"from {tabla}", {})
     except Exception as e:
         return {"tabla": tabla, "existe": False, "filas": None,
                 "ult_mes": None, "error": str(e)}
@@ -668,3 +688,96 @@ def meses_disponibles(df: pd.DataFrame) -> list[int]:
 
 def csv(df: pd.DataFrame) -> bytes:
     return df.to_csv(index=False).encode("utf-8")
+
+
+# --- ventana de datos ------------------------------------------------------
+# De qué mes a qué mes se puede mirar. Sale de las tablas construidas, no del
+# código: cada mes nuevo aparece solo al reconstruir.
+
+# Las tres que usa toda página de negocio. Las de migración y el puente quedan
+# afuera a propósito: tienen meses futuros hechos solo de salidas (ver
+# _TABLAS_CON_SALIDA_FUTURA) y arrancan `rezago` meses después.
+_TABLAS_VENTANA = ("base_clientes", "distribucion_grupo", "cobertura_producto")
+
+
+@dataclass(frozen=True)
+class Ventana:
+    """Rango de meses disponible, con el porqué de cada borde."""
+    desde: int | None
+    hasta: int | None
+    tope_calendario: int
+    por_tabla: dict
+    recortada_por_calendario: bool = False
+    error: str | None = None
+
+    @property
+    def ok(self) -> bool:
+        return self.desde is not None and self.hasta is not None
+
+    def meses(self) -> list[int]:
+        return list(range(self.desde, self.hasta + 1)) if self.ok else []
+
+
+def mes_calendario() -> int:
+    hoy = datetime.now()
+    return hoy.year * 12 + hoy.month
+
+
+@st.cache_data(ttl=TTL, show_spinner=False)
+def _rango_tabla(nombre: str, idu: str) -> tuple[int | None, int | None]:
+    tabla = f"{ESQUEMA}.{nombre}_{validar_idunico(idu)}"
+    df = _ejecutar(f"select min(idx_mes) as primero, {_expr_ultimo_mes(nombre)} "
+                   f"as ultimo from {tabla}", {})
+    if df.empty:
+        return None, None
+    a, b = df["primero"].iloc[0], df["ultimo"].iloc[0]
+    return (int(a) if pd.notna(a) else None, int(b) if pd.notna(b) else None)
+
+
+def ventana_datos(idu: str | None = None) -> Ventana:
+    """El rango donde las tres tablas base tienen datos: desde el mayor de los
+    primeros meses hasta el menor de los últimos.
+
+    El calendario entra SOLO como tope de seguridad, nunca como límite
+    superior directo. Usar el mes en curso haría aparecer, a principios de
+    mes, un mes vacío -- la ingesta todavía no llegó, y el filtro
+    `ingestion_day >= 15` la descartaría igual -- y todas las comparaciones
+    contra el mes anterior se romperían. El tope solo actúa si una tabla trae
+    un mes posterior a hoy, que sería un error de construcción.
+    """
+    idu = idu or idunico()
+    tope = mes_calendario()
+    rangos, errores = {}, []
+    for t in _TABLAS_VENTANA:
+        try:
+            rangos[t] = _rango_tabla(t, idu)
+        except Exception as e:
+            errores.append(f"{t}: {type(e).__name__}: {str(e)[:160]}")
+    validos = {t: r for t, r in rangos.items() if r[0] is not None and r[1] is not None}
+    if errores or not validos:
+        return Ventana(None, None, tope, rangos,
+                       error=("; ".join(errores) or
+                              "las tablas base existen pero están vacías"))
+    desde = max(r[0] for r in validos.values())
+    hasta_dato = min(r[1] for r in validos.values())
+    hasta = min(hasta_dato, tope)
+    if desde > hasta:
+        return Ventana(None, None, tope, rangos,
+                       error=(f"las tablas base no comparten ningún mes: "
+                              f"{validos}"))
+    return Ventana(desde, hasta, tope, rangos,
+                   recortada_por_calendario=hasta < hasta_dato)
+
+
+def ultimo_mes_fuente(desde: int) -> int | None:
+    """Último mes de la tabla fuente, con el filtro de ingestion_day.
+
+    Sin caché: es el dato que dice si llegó una partición nueva, y tiene que
+    mirarse en el momento. `desde` poda particiones; ver
+    sql/00_perfilado/ultimo_mes_fuente.sql.
+    """
+    df = _ejecutar(_leer_perfilado("ultimo_mes_fuente.sql"),
+                   {"desde": f"{int(desde)}"})
+    if df.empty or pd.isna(df["ultimo_mes"].iloc[0]):
+        return None
+    return int(df["ultimo_mes"].iloc[0])

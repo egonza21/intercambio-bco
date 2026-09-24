@@ -29,15 +29,24 @@ st.markdown(theme.CSS, unsafe_allow_html=True)
 # ---------------------------------------------------------------------------
 # Ventana de datos
 # ---------------------------------------------------------------------------
-# La tabla arranca en 2025-05 y llega a 2026-08 (CLAUDE.md, "Ventana de datos
-# y contracción de la base"). El índice es year*12+month, no YYYYMM: tiene que
-# soportar aritmética para el rezago de la migración.
-VENTANA = (theme.idx_mes(2025, 5), theme.idx_mes(2026, 8))
-PRIMER_MES_TABLA = VENTANA[0]
+# Sale de las tablas construidas, no del código: antes estaba fija en
+# mayo 2025 - agosto 2026, y por eso septiembre no aparecía aunque estuviera
+# construido. Ahora cada mes nuevo aparece solo al reconstruir. El índice es
+# year*12+month, no YYYYMM: tiene que soportar aritmética para el rezago.
+VENTANA = data.ventana_datos()
+if VENTANA.ok:
+    st.session_state["primer_mes"] = VENTANA.desde
+else:
+    # Sin tablas no hay ventana. Se deja un rango de un mes para que las
+    # páginas no revienten -- van a salir vacías -- y el error se dice arriba.
+    _fallback = VENTANA.tope_calendario - 1
+    VENTANA = data.Ventana(_fallback, _fallback, VENTANA.tope_calendario,
+                           VENTANA.por_tabla, error=VENTANA.error)
+    st.session_state["primer_mes"] = _fallback
 
 
 def _opciones_mes() -> list[int]:
-    return list(range(VENTANA[0], VENTANA[1] + 1))
+    return VENTANA.meses()
 
 
 def barra_lateral() -> None:
@@ -45,13 +54,38 @@ def barra_lateral() -> None:
     página, debajo de estos."""
     with st.sidebar:
         st.markdown("### Calificaciones de riesgo")
-        st.markdown(
-            f'<p class="nota">Seguimiento de modelos · ventana '
-            f'{theme.etiqueta_mes_idx(VENTANA[0])} a {theme.etiqueta_mes_idx(VENTANA[1])}</p>',
-            unsafe_allow_html=True)
+        if VENTANA.error:
+            st.error(
+                f"**No hay tablas construidas para «{data.idunico()}».** "
+                f"La ventana no se puede calcular y las páginas van a salir "
+                f"vacías.\n\n{VENTANA.error}")
+            st.page_link("pages/9_construccion.py", label="Ir a Construcción",
+                         icon="⚙️")
+        else:
+            st.markdown(
+                f'<p class="nota">Seguimiento de modelos · ventana '
+                f'{theme.etiqueta_mes_idx(VENTANA.desde)} a '
+                f'{theme.etiqueta_mes_idx(VENTANA.hasta)}, según las tablas '
+                f'construidas</p>', unsafe_allow_html=True)
+            if VENTANA.recortada_por_calendario:
+                st.warning(
+                    "Una tabla trae meses posteriores a hoy; la ventana se "
+                    "cortó en el mes en curso. Es un error de construcción: "
+                    "revisar en Construcción.")
 
         st.markdown("## Ventana")
         meses = _opciones_mes()
+        # Si desde la última vista llegó un mes nuevo, "hasta" y el corte se
+        # mueven a él. Sin esto el selectbox conserva la selección vieja de la
+        # sesión y el mes recién construido está en la lista pero no se ve.
+        if st.session_state.get("_ultimo_mes_visto") != VENTANA.hasta:
+            if "_ultimo_mes_visto" in st.session_state:
+                st.session_state["f_hasta"] = VENTANA.hasta
+                st.session_state["f_mes"] = VENTANA.hasta
+            st.session_state["_ultimo_mes_visto"] = VENTANA.hasta
+        for k in ("f_desde", "f_hasta", "f_mes"):
+            if k in st.session_state and st.session_state[k] not in meses:
+                del st.session_state[k]
         c1, c2 = st.columns(2)
         with c1:
             desde = st.selectbox(

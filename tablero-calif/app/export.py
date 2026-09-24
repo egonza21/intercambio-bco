@@ -1,6 +1,7 @@
 """Genera el HTML estático para las revisiones con el equipo.
 
-    python app/export.py --desde 202505 --hasta 202608
+    python app/export.py                          # ventana completa del dato
+    python app/export.py --desde 202601 --hasta 202608   # otra ventana
 
 Usa EXACTAMENTE las mismas funciones de charts.py que pinta la app. No hay una
 segunda definición de ninguna figura: si el HTML se ve distinto al Streamlit,
@@ -197,7 +198,8 @@ class Doc:
             "</div></body></html>")
 
 
-def construir(desde: int, hasta: int, mes: int, rezago: int) -> str:
+def construir(desde: int, hasta: int, mes: int, rezago: int,
+              primer_mes: int | None = None) -> str:
     doc = Doc()
 
     # --- 0. Salud del dato -------------------------------------------------
@@ -358,7 +360,8 @@ def construir(desde: int, hasta: int, mes: int, rezago: int) -> str:
     doc.cierra()
 
     # --- 3. Migración ------------------------------------------------------
-    primer_valido = theme.idx_mes(2025, 5) + rezago
+    # El primer mes con datos sale de las tablas, no de una fecha fija.
+    primer_valido = (primer_mes if primer_mes is not None else desde) + rezago
     desde_ok, mes_mig = max(desde, primer_valido), max(mes, primer_valido)
     doc.seccion("migracion", "Migración",
                 f"Comparación contra {rezago} "
@@ -526,8 +529,12 @@ def construir(desde: int, hasta: int, mes: int, rezago: int) -> str:
 
 def main() -> int:
     p = argparse.ArgumentParser(description="Exporta el tablero a un HTML estático.")
-    p.add_argument("--desde", type=int, default=202505, help="mes inicial, YYYYMM")
-    p.add_argument("--hasta", type=int, default=202608, help="mes final, YYYYMM")
+    p.add_argument("--desde", type=int, default=None,
+                   help="mes inicial, YYYYMM. Por defecto, el primero de las "
+                        "tablas construidas")
+    p.add_argument("--hasta", type=int, default=None,
+                   help="mes final, YYYYMM. Por defecto, el último de las "
+                        "tablas construidas")
     p.add_argument("--mes", type=int, default=None, help="mes de corte, YYYYMM")
     p.add_argument("--rezago", type=int, default=1, choices=[1, 6])
     p.add_argument("--salida", type=Path, default=None)
@@ -536,10 +543,30 @@ def main() -> int:
     def a_idx(yyyymm: int) -> int:
         return theme.idx_mes(int(yyyymm) // 100, int(yyyymm) % 100)
 
-    desde, hasta = a_idx(a.desde), a_idx(a.hasta)
+    # Los valores por defecto salen del MISMO cálculo que la ventana de la
+    # app: antes eran 202505 y 202608 escritos a mano, y por eso un export
+    # sin argumentos nunca incluía el mes nuevo.
+    v = data.ventana_datos()
+    if not v.ok:
+        print(f"No se puede calcular la ventana: {v.error}", file=sys.stderr)
+        print("¿Están construidas las tablas para "
+              f"«{data.idunico()}»?", file=sys.stderr)
+        return 1
+    desde = a_idx(a.desde) if a.desde else v.desde
+    hasta = a_idx(a.hasta) if a.hasta else v.hasta
+    if desde > hasta:
+        print("--desde es posterior a --hasta.", file=sys.stderr)
+        return 1
+    fuera = [n for n, m in (("--desde", desde), ("--hasta", hasta))
+             if not v.desde <= m <= v.hasta]
+    if fuera:
+        print(f"Aviso: {', '.join(fuera)} cae fuera de lo construido "
+              f"({theme.etiqueta_mes_idx(v.desde)} a "
+              f"{theme.etiqueta_mes_idx(v.hasta)}); esos meses van a salir "
+              f"vacíos.", file=sys.stderr)
     mes = a_idx(a.mes) if a.mes else hasta
 
-    html = construir(desde, hasta, mes, a.rezago)
+    html = construir(desde, hasta, mes, a.rezago, primer_mes=v.desde)
 
     DIR_SALIDA.mkdir(exist_ok=True)
     destino = a.salida or (DIR_SALIDA /

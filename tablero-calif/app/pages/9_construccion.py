@@ -99,8 +99,9 @@ if not reg.empty:
 st.markdown("---")
 st.markdown("## Estado de las tablas")
 st.markdown(
-    '<p class="sub">Si el mes máximo de alguna tabla se quedó atrás respecto '
-    'de la partición nueva, hay que reconstruir.</p>',
+    '<p class="sub">El último mes de la <b>tabla fuente</b> al lado del último '
+    'mes <b>construido</b>. Si la fuente va más adelante, llegó una partición '
+    'nueva y hay que reconstruir; hasta entonces el tablero no la ve.</p>',
     unsafe_allow_html=True)
 
 if st.button("Consultar estado", key="p9_estado"):
@@ -112,30 +113,81 @@ if st.button("Consultar estado", key="p9_estado"):
             "tabla": t,
             "existe": "sí" if e["existe"] else "NO",
             "filas": theme.fmt_miles(e["filas"]) if e["existe"] else "--",
+            "_ult": e["ult_mes"],
             "último mes": (theme.etiqueta_mes_idx(e["ult_mes"])
                            if e["ult_mes"] else "--"),
             "detalle": (e["error"] or "")[:90],
         })
         barra.progress(i / len(data.TABLAS_CONSTRUIDAS), text=f"{t}…")
+    barra.progress(1.0, text="Tabla fuente…")
+    ults = [f["_ult"] for f in filas if f["_ult"]]
+    # Hasta dónde está construido TODO: el menor de los últimos meses. Si una
+    # tabla se quedó atrás, ese es el mes que manda.
+    construido = min(ults) if ults else None
+    try:
+        fuente = data.ultimo_mes_fuente(
+            construido if construido else data.mes_calendario() - 3)
+        err_fuente = None
+    except Exception as e:
+        fuente, err_fuente = None, f"{type(e).__name__}: {e}"
     barra.empty()
     st.session_state["p9_estado_df"] = pd.DataFrame(filas)
+    st.session_state["p9_fuente"] = (fuente, construido, err_fuente)
 
 if "p9_estado_df" in st.session_state:
     df = st.session_state["p9_estado_df"]
+    fuente, construido, err_fuente = st.session_state.get(
+        "p9_fuente", (None, None, None))
+    etq = lambda m: theme.etiqueta_mes_idx(m) if m else "--"
+
+    k1, k2 = st.columns(2)
+    k1.metric("Último mes en la tabla fuente", etq(fuente),
+              help="Con ingestion_day >= 15, como todo el repo: una carga "
+                   "parcial de principios de mes no cuenta.")
+    k2.metric("Último mes construido", etq(construido),
+              help="El menor de los últimos meses de las tablas: hasta ahí "
+                   "está construido TODO.")
+    if err_fuente:
+        st.warning(f"No se pudo consultar la tabla fuente: {err_fuente}")
+    elif fuente and construido and fuente > construido:
+        st.error(
+            f"**Hay que reconstruir.** La fuente llega a **{etq(fuente)}** y "
+            f"lo construido a **{etq(construido)}**: "
+            f"{fuente - construido} {'mes' if fuente - construido == 1 else 'meses'} "
+            f"sin incorporar. El tablero no los muestra hasta reconstruir.",
+            icon="⛔")
+    elif fuente and construido and fuente < construido:
+        st.error(
+            f"**Lo construido va más adelante que la fuente** ({etq(construido)} "
+            f"contra {etq(fuente)}). No debería pasar: puede que se haya borrado "
+            f"una partición o que la de {etq(construido)} ya no pase el filtro "
+            f"de ingestion_day.")
+    elif construido and fuente is None:
+        st.warning(
+            f"La fuente no tiene ninguna partición desde {etq(construido)} con "
+            f"ingestion_day >= 15. Revisar la ingesta.")
+    elif fuente and construido:
+        st.success(f"Al día: la fuente y lo construido llegan a {etq(fuente)}.")
+
     faltan = (df["existe"] == "NO").sum()
     if faltan:
         st.warning(f"{faltan} de {len(df)} tablas no existen para «{activo}». "
                    f"Si es una versión nueva, es lo esperado: hay que "
                    f"construirla entera.")
     else:
-        meses = {m for m in df["último mes"] if m != "--"}
+        meses = sorted({m for m in df["_ult"] if m})
         if len(meses) > 1:
-            st.warning(f"Las tablas no llegan todas al mismo mes: {sorted(meses)}. "
-                       f"Puede ser una construcción a medias.")
-        else:
-            st.success(f"Las {len(df)} tablas existen y llegan a "
-                       f"{meses.pop() if meses else '--'}.")
-    st.dataframe(df, use_container_width=True, hide_index=True)
+            st.warning(f"Las tablas no llegan todas al mismo mes: "
+                       f"{', '.join(etq(m) for m in meses)}. Puede ser una "
+                       f"construcción a medias.")
+    st.markdown(
+        '<p class="nota">En las tablas de migración y en el puente, el último '
+        'mes es el último con alguna fila que no sea salida. Su join deja al '
+        'final meses que todavía no existen, hechos solo de los clientes del '
+        'último mes real "saliendo" hacia el futuro: uno en las r1 y en el '
+        'puente, seis en las r6.</p>', unsafe_allow_html=True)
+    st.dataframe(df.drop(columns=["_ult"]), use_container_width=True,
+                 hide_index=True)
 
 # ---------------------------------------------------------------------------
 # Ejecución

@@ -34,7 +34,8 @@ with st.sidebar:
 
 # El origen es idx_mes - rezago, así que los primeros meses de la tabla no
 # tienen contra qué compararse. Ver CLAUDE.md.
-primer_valido = theme.idx_mes(2025, 5) + rezago
+# El primer mes sale de las tablas construidas (main.py), no de una fecha fija.
+primer_valido = st.session_state["primer_mes"] + rezago
 desde_ok = max(desde, primer_valido)
 
 st.markdown(
