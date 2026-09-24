@@ -70,6 +70,29 @@ if ddl_ok:
 else:
     st.error(f"**No se puede reconstruir.**\n\n{ddl_msg}", icon="⛔")
 
+# --- instancias del helper en este proceso ---------------------------------
+# Tiene que ser UNA. Si hay más, el motivo de cada una dice si fueron
+# reconexiones reales o algo que vació el caché.
+reg = data.registro_helper()
+if not reg.empty:
+    n_rec = int(reg["motivo"].str.startswith("reconexión").sum())
+    n_fallo = int(reg["resultado"].str.startswith("falló").sum())
+    partes = [f"**{len(reg)}** {'instancia' if len(reg) == 1 else 'instancias'} "
+              f"del helper en este proceso"]
+    if n_rec:
+        partes.append(f"{n_rec} por reconexión")
+    if n_fallo:
+        partes.append(f"{n_fallo} fallidas")
+    linea = " · ".join(partes)
+    if len(reg) == 1 and not n_fallo:
+        st.markdown(f'<p class="nota">{linea}, creada el {reg["hora"].iloc[0]} '
+                    f'({reg["motivo"].iloc[0]}).</p>', unsafe_allow_html=True)
+    else:
+        (st.warning if n_fallo or len(reg) > 3 else st.info)(
+            linea + ". En un proceso sano es una sola; cada fila de abajo "
+            "dice por qué se creó.")
+        st.dataframe(reg, use_container_width=True, hide_index=True)
+
 # ---------------------------------------------------------------------------
 # Estado actual
 # ---------------------------------------------------------------------------

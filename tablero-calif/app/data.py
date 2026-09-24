@@ -16,6 +16,8 @@ desde la página de administración.
 from __future__ import annotations
 
 import re
+import threading
+from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
@@ -73,6 +75,51 @@ IDUNICO_POR_DEFECTO = "vfinal"
 FORMATO_PARAMETRO = "{{{nombre}}}"
 
 
+# Registro de instanciaciones del helper. Vive a nivel de módulo, NO en
+# cache_resource: el «Clear cache» del menú de Streamlit vacía también los
+# recursos, y un registro que se borra justo cuando se recrea la instancia no
+# registra nada. Así sobrevive a todo menos a reiniciar el proceso, que es
+# exactamente la vida de una instancia.
+_REGISTRO_HELPER: list[dict] = []
+_CANDADO_HELPER = threading.Lock()
+# Motivo de la PRÓXIMA instanciación. Lo fija _con_reintento() antes de limpiar
+# el caché; _helper() lo consume. Sin eso, cada instancia nueva se vería igual
+# en el registro y no se sabría si fue arranque, reconexión o limpieza manual.
+_motivo_pendiente: str | None = None
+
+
+def _tomar_motivo() -> str:
+    global _motivo_pendiente
+    with _CANDADO_HELPER:
+        motivo, _motivo_pendiente = _motivo_pendiente, None
+    if motivo:
+        return motivo
+    if not _REGISTRO_HELPER:
+        return "primera instanciación del proceso"
+    return ("caché vaciado desde fuera del código (menú «Clear cache» de "
+            "Streamlit)")
+
+
+def _registrar_instancia(motivo: str, resultado: str) -> None:
+    with _CANDADO_HELPER:
+        _REGISTRO_HELPER.append({
+            "hora": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "motivo": motivo,
+            "resultado": resultado,
+        })
+
+
+def registro_helper() -> pd.DataFrame:
+    """Cada instanciación del helper en este proceso, con hora y motivo.
+
+    La muestra la página de Construcción: cuántas instancias hubo y por qué se
+    ve acá, en vez de suponerse. En un proceso sano es UNA fila.
+    """
+    with _CANDADO_HELPER:
+        filas = list(_REGISTRO_HELPER)
+    return pd.DataFrame(filas, columns=["hora", "motivo", "resultado"])
+
+
 @st.cache_resource(show_spinner=False)
 def _helper():
     """UNA instancia por proceso de Streamlit, compartida por todas las páginas.
@@ -85,20 +132,52 @@ def _helper():
 
     NO se cierra. El patrón del banco es instanciar y reusar; un `close` acá
     dejaría inservible la instancia que siguen usando las demás páginas.
+
+    Cada instanciación queda en el registro (registro_helper()), incluidas las
+    que fallan: un helper que no se puede crear también es un dato.
     """
     from helper import Helper
 
-    return Helper(dsn=DSN, username=USUARIO)
+    motivo = _tomar_motivo()
+    try:
+        hp = Helper(dsn=DSN, username=USUARIO)
+    except Exception as e:
+        _registrar_instancia(motivo, f"falló: {type(e).__name__}: {e}")
+        raise
+    _registrar_instancia(motivo, "ok")
+    return hp
 
 
-# Marcas de que se cayó la CONEXIÓN. A diferencia de un notebook, el proceso
-# de Streamlit vive horas y una instancia cacheada puede quedarse con el socket
-# muerto por inactividad. Solo con estas se reinstancia y se reintenta.
+# Mensajes ESPECÍFICOS de conexión caída. Antes la lista tenía palabras
+# genéricas -- "connection", "closed", "timeout", "socket", "eof" -- que
+# aparecen también en errores que no son de conexión ("cursor is closed", un
+# timeout de consulta, un EOF de parseo). Cada falso positivo vaciaba el caché
+# y creaba una instancia nueva sin necesidad.
+#
+# Criterio: frases que solo produce la capa de transporte (socket, thrift, SSL)
+# o una sesión de Impala vencida por inactividad, que es justamente el caso de
+# un proceso de Streamlit que vive horas.
 _SENALES_CONEXION = (
-    "broken pipe", "closed", "connection", "conexión", "eof",
-    "not connected", "refused", "reset by peer", "socket", "thrift",
-    "timed out", "timeout", "transport", "unable to connect",
+    # socket / sistema operativo
+    "broken pipe",                      # EPIPE
+    "connection reset by peer",         # ECONNRESET
+    "connection refused",               # ECONNREFUSED
+    "connection aborted",               # ECONNABORTED
+    "connection timed out",             # ETIMEDOUT, el del socket
+    "[errno 32]", "[errno 104]", "[errno 110]", "[errno 111]",
+    # thrift, que es sobre lo que viaja HiveServer2
+    "ttransportexception",
+    "tsocket read 0 bytes",
+    "could not connect to",
+    # SSL
+    "eof occurred in violation of protocol",
+    # sesión de Impala vencida por inactividad
+    "session expired", "invalid session id", "session is closed",
 )
+# Excepciones de Python que son de conexión por su TIPO, sin mirar el texto.
+# TimeoutError queda afuera a propósito: un helper puede usarla para una
+# consulta que tardó demasiado, y eso no se arregla reconectando.
+_TIPOS_CONEXION = (ConnectionError,)
 # Y estas ganan siempre: son errores de la CONSULTA. Reintentar un SQL que
 # falló no lo arregla -- lo vuelve a correr, que en un DDL puede ser caro --
 # y además esconde el error real detrás de un segundo intento idéntico.
@@ -121,6 +200,8 @@ def _es_error_de_conexion(e: BaseException) -> bool:
         texto = f"{type(actual).__name__} {actual}".lower()
         if any(m in texto for m in _SENALES_SQL):
             return False
+        if isinstance(actual, _TIPOS_CONEXION):
+            return True
         if any(m in texto for m in _SENALES_CONEXION):
             return True
         actual = actual.__cause__ or actual.__context__
@@ -134,11 +215,15 @@ def _con_reintento(operacion):
     El reintento es exactamente uno: si la segunda también falla, el problema
     no es una conexión dormida y el error tiene que verse.
     """
+    global _motivo_pendiente
     try:
         return operacion(_helper())
     except Exception as e:
         if not _es_error_de_conexion(e):
             raise
+        with _CANDADO_HELPER:
+            _motivo_pendiente = (f"reconexión tras {type(e).__name__}: "
+                                 f"{str(e)[:200]}")
         _helper.clear()
         return operacion(_helper())
 
