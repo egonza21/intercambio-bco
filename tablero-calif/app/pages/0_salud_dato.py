@@ -73,6 +73,7 @@ resultados.append(charts.chequeo_pd_grupo(nulos))
 nivel, mensaje, _ = charts.resumen_global(resultados)
 {"alerta": st.error, "aviso": st.warning, "ok": st.success}[nivel](f"**{mensaje}**")
 
+st.markdown(charts.guia("chequeos"), unsafe_allow_html=True)
 cols = st.columns(len(resultados))
 for col, c in zip(cols, resultados):
     col.markdown(
@@ -114,6 +115,7 @@ st.markdown(
     'sube, el proceso que replica la PD entre las columnas se está '
     'degradando.</p>',
     unsafe_allow_html=True)
+st.markdown(charts.guia("discordancia_pd_grupo"), unsafe_allow_html=True)
 st.plotly_chart(charts.discordancia_pd_grupo(nulos),
                 use_container_width=True, key="p0_disc")
 

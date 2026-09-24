@@ -158,6 +158,7 @@ st.markdown(
     'vista por defecto muestra las primeras de cada segmento, y por eso no '
     'hay forma de silenciar celdas.</p>', unsafe_allow_html=True)
 
+st.markdown(charts.guia("ranking"), unsafe_allow_html=True)
 if rk.empty:
     st.success(
         "Ninguna celda con historia suficiente superó el piso de variación "
@@ -220,6 +221,7 @@ if not an.sin_variabilidad.empty:
         'de cero no da un número, da un centinela. Se ordenan por variación '
         'cruda.</p>',
         unsafe_allow_html=True)
+    st.markdown(charts.guia("sin_variabilidad"), unsafe_allow_html=True)
     vis = an.sin_variabilidad.drop(columns=["serie", "_cod_seg"]).copy()
     vis["var_rel"] = vis["var_rel"].map(lambda v: f"{v * 100:+.1f}%")
     st.dataframe(vis, use_container_width=True, hide_index=True)
@@ -242,6 +244,7 @@ if not sin_base.empty:
             f'pero justo, y conviene saber cuáles no lo tienen. Los meses '
             f'cuentan solo si son consecutivos.</p>',
             unsafe_allow_html=True)
+        st.markdown(charts.guia("sin_baseline"), unsafe_allow_html=True)
         vis = sin_base.drop(columns=["serie", "_cod_seg"]).copy()
         vis["var_rel"] = vis["var_rel"].map(lambda v: f"{v * 100:+.1f}%")
         st.dataframe(vis, use_container_width=True, hide_index=True)
@@ -256,6 +259,7 @@ st.markdown(
     '<b>cobertura</b> no se mueve — bajan numerador y denominador a la vez — '
     'pero la <b>cantidad</b> sí.</p>',
     unsafe_allow_html=True)
+st.markdown(charts.guia("matriz_segmento_producto"), unsafe_allow_html=True)
 modo = st.radio("Modo", list(charts.MODOS_MATRIZ), horizontal=True,
                 key="p0a_modo", format_func=lambda m: charts.MODOS_MATRIZ[m])
 st.plotly_chart(charts.matriz_segmento_producto(cob, mes, modo),

@@ -12,7 +12,8 @@ import plotly.graph_objects as go
 
 import theme
 from theme import aplicar_template as _t
-from charts_base import _sin_datos
+from charts_base import (
+    _sin_datos, banda_historica, leyenda_banda, registrar_guia)
 
 
 @dataclass
@@ -308,6 +309,7 @@ def discordancia_pd_grupo(df: pd.DataFrame) -> go.Figure:
 
     principales, resto = activos[:4], activos[4:]
     fig = go.Figure()
+    hubo = False
     for i, prod in enumerate(principales):
         s = (df[df["producto"] == prod].groupby("idx_mes")["pd_nulo_grupo_no_nulo"]
              .sum().reindex(meses).fillna(0))
@@ -316,6 +318,7 @@ def discordancia_pd_grupo(df: pd.DataFrame) -> go.Figure:
             line=dict(color=theme.SERIES[i], width=2, dash=theme.SERIES_DASH[i]),
             marker=dict(size=7, line=dict(color=theme.SURFACE, width=2)),
             hovertemplate=prod + " · %{y:,.0f} filas<extra></extra>")
+        hubo = banda_historica(fig, s.values, theme.SERIES[i]) or hubo
     if resto:
         # Más de cuatro productos con discordancia ya es de por sí una señal:
         # se agregan para no salir de la paleta, pero el gráfico lo dice.
@@ -332,9 +335,30 @@ def discordancia_pd_grupo(df: pd.DataFrame) -> go.Figure:
                  f"{len(resto)} van agregados en «otros».",
             font=dict(size=11, color=theme.ESTADO_ALERTA, family=theme.FONT))
 
+    if hubo:
+        leyenda_banda(fig)
     fig.update_layout(height=360)
     fig.update_xaxes(title_text="")
     fig.update_yaxes(title_text="Filas con PD nula y grupo poblado",
                      tickformat=",.0f", rangemode="tozero")
     return _t(fig, unified=True)
 
+
+# ===========================================================================
+# GUÍAS DE LECTURA (ver charts_base.guia)
+# ===========================================================================
+registrar_guia(
+    "chequeos",
+    "Los cuatro supuestos sobre los que se apoya el resto del tablero, "
+    "verificados sobre la ventana.",
+    "Verde pasa; ámbar pasa con algo que actualizar; rojo pide revisión; gris "
+    "no se ejecutó. El detalle se despliega solo si falla o avisa.",
+    "Los cuatro en verde. Un rojo significa que los números de las otras "
+    "páginas pueden no significar lo que parecen; un gris no afirma nada.")
+registrar_guia(
+    "discordancia_pd_grupo",
+    "Filas con PD nula y grupo poblado, por producto, mes a mes.",
+    "Una línea por producto con discordancia; la banda es su rango habitual.",
+    "Que existan no es un problema: hoy se concentran en un producto. Llama "
+    "la atención que crezcan o que aparezca un producto nuevo: la "
+    "replicación de la PD se estaría degradando.")

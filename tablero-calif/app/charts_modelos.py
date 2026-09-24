@@ -12,7 +12,9 @@ import plotly.graph_objects as go
 
 import theme
 from theme import aplicar_template as _t
-from charts_base import _sin_datos, _grupos_ordenados
+from charts_base import (
+    _sin_datos, _grupos_ordenados, banda_historica, leyenda_banda,
+    registrar_guia)
 
 
 # ===========================================================================
@@ -217,6 +219,7 @@ def _grafico_psi(s: pd.DataFrame, columna_serie: str, titulo_y: str,
     elegidas = orden.index.tolist()[:max_series]
 
     fig = go.Figure()
+    hubo = False
     for i, nombre in enumerate(elegidas):
         # SIN fillna(0), a diferencia del resto del archivo. Acá el hueco es
         # lo correcto: que un modelo no tenga PSI en un mes significa que no se
@@ -231,12 +234,15 @@ def _grafico_psi(s: pd.DataFrame, columna_serie: str, titulo_y: str,
                       dash=theme.SERIES_DASH[i % 4]),
             marker=dict(size=8, line=dict(color=theme.SURFACE, width=2)),
             hovertemplate=f"{nombre} · PSI %{{y:.3f}}<extra></extra>")
+        hubo = banda_historica(fig, sub["psi"].values, theme.SERIES[i % 4]) or hubo
     for val, txt, col in ((0.10, "0,10  revisar", theme.ESTADO_ALERTA),
                           (0.25, "0,25  severo", theme.ESTADO_CRITICO)):
         fig.add_hline(y=val, line=dict(color=col, width=1, dash="dot"), opacity=0.55)
         fig.add_annotation(x=1, y=val, xref="paper", yref="y", xanchor="left",
                            xshift=6, showarrow=False, text=txt,
                            font=dict(size=10, color=col, family=theme.FONT))
+    if hubo:
+        leyenda_banda(fig)
     fig.update_layout(height=400, margin=dict(r=140))
     fig.update_xaxes(title_text="", categoryorder="array", categoryarray=etiquetas)
     fig.update_yaxes(title_text=titulo_y, rangemode="tozero")
@@ -350,3 +356,62 @@ def tabla_solapamientos(df: pd.DataFrame) -> pd.DataFrame:
     out = s[["mes", "producto", "modelo", "grupo", "pd_min", "pd_max",
              "pd_max_grupo_previo", "solapamiento", "clientes"]]
     return out.sort_values(["solapamiento"], ascending=False).reset_index(drop=True)
+
+
+# ===========================================================================
+# GUÍAS DE LECTURA (ver charts_base.guia)
+# ===========================================================================
+registrar_guia(
+    "histograma_pd",
+    "La distribución de la PD de cada modelo en el mes.",
+    "Eje X logarítmico, una línea por modelo. Las dos escalas, probabilidad "
+    "y puntaje, nunca comparten eje.",
+    "Curvas suaves. Llama la atención un modelo en bins absurdos — un "
+    "puntaje binado como probabilidad —, un pico aislado, o una curva que "
+    "cambia de forma de un mes a otro.")
+registrar_guia(
+    "psi_general",
+    "Cuánto se movió la distribución de grupos de toda la población frente "
+    "al mes de referencia. Es el nivel que decide.",
+    "Umbrales en 0,10 (revisar) y 0,25 (severo). La banda es el rango "
+    "habitual de la propia serie. Con base fija la deriva se acumula; con "
+    "base móvil es el cambio de un mes al siguiente.",
+    "Debajo de 0,10 y dentro de su banda. Llama la atención cruzar 0,10, o "
+    "un punto fuera de la banda aunque siga bajo el umbral.")
+registrar_guia(
+    "aporte_psi_grupo",
+    "Qué grupo aporta más al PSI del mes.",
+    "La participación de cada grupo en la base y en el mes, y su aporte al "
+    "índice.",
+    "Aportes repartidos y chicos. Llama la atención un grupo que concentra "
+    "casi todo el índice: el movimiento tiene nombre.")
+registrar_guia(
+    "psi_modelo",
+    "El mismo PSI de grupos, filtrado a un modelo.",
+    "Mide qué población le está entrando a ese modelo, no si el modelo "
+    "cambió.",
+    "Bajo y dentro de su banda. Si sube, contrastarlo con la vigencia y con "
+    "el flujo entre modelos antes de concluir nada: un salto acá suele ser "
+    "reasignación, no deriva.")
+registrar_guia(
+    "psi_pd",
+    "PSI sobre bins de PD, por modelo.",
+    "Es diagnóstico: detecta una PD que se mueve dentro de un grupo sin "
+    "cambiar el reparto entre grupos. Se descartan los bins con menos de "
+    "0,1% de población.",
+    "Bajo y dentro de su banda. Llama la atención cuando el nivel 1 está "
+    "tranquilo y este sube: la PD se está moviendo sin cruzar cortes.")
+registrar_guia(
+    "sensibilidad_cortes",
+    "Dónde cae cada frontera de grupo sobre la PD, por producto.",
+    "Una fila por producto; cada banda es el rango de PD de un grupo. Como "
+    "todos traducen la misma PD, las filas se comparan verticalmente.",
+    "Bandas escalonadas que no se cruzan. Una X roja marca un solapamiento: "
+    "dos clientes con la misma PD en grupos distintos.")
+registrar_guia(
+    "tabla_solapamientos",
+    "Cortes cuyo rango de PD se cruza con el del grupo anterior.",
+    "Una fila por grupo solapado, ordenada por el tamaño del solapamiento.",
+    "Vacía. Una fila no es necesariamente un error — puede ser una regla de "
+    "negocio —, pero cambia cómo se lee el tablero y tiene que ser una "
+    "decisión conocida.")

@@ -7,7 +7,9 @@ import plotly.graph_objects as go
 
 import theme
 from theme import aplicar_template as _t
-from charts_base import _sin_datos, _rezago, _pie_comparacion
+from charts_base import (
+    _sin_datos, _rezago, _pie_comparacion, banda_historica, leyenda_banda,
+    registrar_guia)
 
 
 # ===========================================================================
@@ -343,6 +345,12 @@ def estabilidad_deterioro(df: pd.DataFrame, producto: str) -> go.Figure:
     fig.add_scatter(x=etiquetas, y=s["deterioro"], name="Empeoraron",
                     mode="lines", line=dict(color=theme.SERIES[1], width=2, dash="dash"),
                     hovertemplate="Empeoraron · %{y:.1%}<extra></extra>")
+    hubo = False
+    for col, color in (("estabilidad", theme.SERIES[0]), ("mejora", theme.SERIES[2]),
+                       ("deterioro", theme.SERIES[1])):
+        hubo = banda_historica(fig, s[col].values, color) or hubo
+    if hubo:
+        leyenda_banda(fig)
     fig.add_hline(y=0, line=dict(color=theme.AXIS, width=1))
     if huecos:
         fig.add_annotation(
@@ -456,3 +464,55 @@ def tabla_peores_saltos(df: pd.DataFrame, minimo: int = 3) -> pd.DataFrame:
     g = (d.groupby(["mes", "producto", "grupo_base_origen", "grupo_base_destino", "saltos"],
                    as_index=False)["clientes"].sum())
     return g.sort_values("clientes", ascending=False).reset_index(drop=True)
+
+
+# ===========================================================================
+# GUÍAS DE LECTURA (ver charts_base.guia)
+# ===========================================================================
+registrar_guia(
+    "matriz_migracion",
+    "De qué grupo a qué grupo se movieron los clientes entre dos meses, más "
+    "los que entraron, salieron o cambiaron de elegibilidad.",
+    "Filas: grupo en el mes de origen; columnas: en el de destino. Azul es "
+    "mejora, rojo deterioro, y la intensidad es el % de la fila. En gris, "
+    "fuera de la escala, las categorías de borde: entradas, salidas y las "
+    "cuatro de elegibilidad.",
+    "La diagonal concentra casi toda la masa. Llama la atención masa lejos "
+    "de la diagonal — saltos de varios grupos — o una columna «PERDIÓ · dejó "
+    "de calificarse» grande: son clientes que salieron del universo "
+    "calificable.")
+registrar_guia(
+    "estabilidad_deterioro",
+    "Qué parte de los clientes se quedó en su grupo, mejoró o empeoró, cada "
+    "mes.",
+    "Tres líneas, sobre los clientes con grupo en los dos meses. Cada punto "
+    "compara un mes contra su referencia. Las bandas son el rango habitual "
+    "de cada línea.",
+    "Estabilidad alta y pareja; mejora y deterioro bajas y parecidas. Llama "
+    "la atención un punto fuera de su banda, o mejora y deterioro subiendo a "
+    "la vez: más rotación, que no es lo mismo que más riesgo.")
+registrar_guia(
+    "tabla_peores_saltos",
+    "Combinaciones origen → destino con caída de tres grupos o más.",
+    "Una fila por combinación, ordenada por cantidad de clientes.",
+    "Pocas filas y chicas. Llama la atención una combinación con mucho "
+    "volumen, y cualquier salto desde G1–G2: clientes buenos que se "
+    "deterioraron de golpe.")
+registrar_guia(
+    "flujo_modelos",
+    "Clientes que cambiaron de modelo entre los dos meses, entre los que "
+    "tienen grupo en ambos.",
+    "Filas: modelo de origen; columnas: de destino. La diagonal va sin color "
+    "para no dominar la escala; el conteo sigue anotado.",
+    "Casi todo en la diagonal. Un flujo grande hacia un modelo explica un "
+    "PSI que sube sin deriva. «(sin modelo)» son clientes con grupo y sin "
+    "modelo, una anomalía del dato: los que dejaron de calificarse están en "
+    "la matriz de migración, columna «PERDIÓ · dejó de calificarse».")
+registrar_guia(
+    "matriz_migracion_pd",
+    "Cómo se reordenaron los clientes entre deciles de PD de un mes a otro.",
+    "Filas: decil en el mes de origen; columnas: en el de destino. El número "
+    "es el % de la fila.",
+    "Diagonal fuerte. Ojo: dice que el ORDEN se mantuvo, no que la PD no se "
+    "movió — eso lo dice el PSI. Llama la atención masa lejos de la "
+    "diagonal: el modelo está reordenando a los clientes.")

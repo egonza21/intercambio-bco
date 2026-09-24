@@ -205,6 +205,7 @@ st.markdown(
      'de composición, no el mismo en otra unidad — acá se ve el tamaño de '
      'cada producto, no cómo se reparte por dentro.</p>'),
     unsafe_allow_html=True)
+st.markdown(charts.guia("composicion_grupo"), unsafe_allow_html=True)
 st.plotly_chart(charts.composicion_grupo(dist_mes, "todas",
                                         porcentaje=apilado_pct),
                 use_container_width=True, key="p1_comp")
@@ -227,6 +228,7 @@ with c1:
         'segmentos grandes dominan la escala. El porcentaje dentro de cada '
         'segmento está en el hover.</p>',
         unsafe_allow_html=True)
+    st.markdown(charts.guia("heatmap_segmento_grupo"), unsafe_allow_html=True)
     st.plotly_chart(
         charts.heatmap_segmento_grupo(dist_mes, "todos", normalizar_hm),
         use_container_width=True, key="p1_hm")
@@ -234,6 +236,7 @@ with c2:
     st.markdown("## Cobertura por producto")
     st.markdown('<p class="sub">Clientes con grupo sobre la base del mes.</p>',
                 unsafe_allow_html=True)
+    st.markdown(charts.guia("cobertura"), unsafe_allow_html=True)
     st.plotly_chart(charts.cobertura(cob_mes, "todos"),
                     use_container_width=True, key="p1_cob")
 
@@ -255,6 +258,7 @@ st.markdown(
     'ordenara por sus propios datos, un producto cambiaría de posición entre '
     'meses y la comparación de un vistazo dejaría de servir.</p>',
     unsafe_allow_html=True)
+st.markdown(charts.guia("comparar_meses"), unsafe_allow_html=True)
 meses_disp = data.meses_disponibles(dist_f)
 if len(meses_disp) >= 2:
     cc1, cc2 = st.columns(2)

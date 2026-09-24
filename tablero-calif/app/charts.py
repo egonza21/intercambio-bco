@@ -23,7 +23,8 @@ figuras: son alertas de calidad, no gráficos.
 """
 from __future__ import annotations
 
-from charts_base import VACIO, mes_comparacion, leyenda_comparacion
+from charts_base import (
+    VACIO, mes_comparacion, leyenda_comparacion, guia, GUIAS, TEXTO_BANDA)
 from charts_panorama import (
     composicion_grupo,
     heatmap_segmento_grupo,
@@ -75,7 +76,7 @@ from charts_salud import (
 
 __all__ = [
     "Anomalias", "BASE_MINIMA", "Chequeo", "MESES_MINIMOS", "MIN_PESO_BIN",
-    "MODOS_MATRIZ", "PISO_VARIACION", "VACIO", "aporte_psi_grupo",
+    "MODOS_MATRIZ", "PISO_VARIACION", "VACIO", "guia", "GUIAS", "TEXTO_BANDA", "aporte_psi_grupo",
     "base_clientes_tiempo", "chequeo_dominio", "chequeo_ingestion_day",
     "chequeo_mapeo", "chequeo_pd_grupo", "cobertura", "composicion_grupo",
     "discordancia_pd_grupo", "estabilidad_deterioro", "flujo_modelos",

@@ -59,6 +59,7 @@ st.markdown(
     f'<p class="sub">Producto <b>{producto}</b>. Cada mes suma 100%: lo que se '
     f've es cómo cambia el reparto, no cuántos clientes hay.</p>',
     unsafe_allow_html=True)
+st.markdown(charts.guia("mezcla_riesgo"), unsafe_allow_html=True)
 st.plotly_chart(charts.mezcla_riesgo(dist, producto),
                 use_container_width=True, key="p2_mezcla")
 
@@ -67,6 +68,7 @@ with c1:
     st.markdown("## Base de clientes")
     st.markdown('<p class="sub">Conteo absoluto por segmento.</p>',
                 unsafe_allow_html=True)
+    st.markdown(charts.guia("base_clientes_tiempo"), unsafe_allow_html=True)
     st.plotly_chart(charts.base_clientes_tiempo(base),
                     use_container_width=True, key="p2_base")
 with c2:
@@ -77,6 +79,7 @@ with c2:
         'un modelo nuevo con 1% de población es invisible, y acá es un '
         'escalón.</p>',
         unsafe_allow_html=True)
+    st.markdown(charts.guia("modelos_vivos"), unsafe_allow_html=True)
     st.plotly_chart(charts.modelos_vivos(dist),
                     use_container_width=True, key="p2_vivos")
 
@@ -105,10 +108,12 @@ else:
         format_func=lambda c: "todos" if c == "todos" else theme.etiqueta_segmento(c))
     cpa, cpb = st.columns([1, 1.1])
     with cpa:
+        st.markdown(charts.guia("puente_base"), unsafe_allow_html=True)
         st.plotly_chart(charts.puente_base(puente, mes_corte, seg_p),
                         use_container_width=True, key="p2_puente")
     with cpb:
         st.markdown("#### Entradas y salidas por segmento")
+        st.markdown(charts.guia("puente_por_segmento"), unsafe_allow_html=True)
         st.plotly_chart(charts.puente_por_segmento(puente, mes_corte),
                         use_container_width=True, key="p2_puenteseg")
 

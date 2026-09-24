@@ -89,11 +89,13 @@ with st.sidebar:
     modelos_c = (["todos"] + sorted(cortes_mes["modelo"].dropna().unique().tolist())
                  if not cortes_mes.empty else ["todos"])
     modelo_c = st.selectbox("Modelo (cortes)", modelos_c, key="p4_modelo")
+st.markdown(charts.guia("sensibilidad_cortes"), unsafe_allow_html=True)
 st.plotly_chart(charts.sensibilidad_cortes(cortes_mes, modelo_c),
                 use_container_width=True, key="p4_cortes")
 
 # --- alerta de solapamientos ----------------------------------------------
 st.markdown("### Solapamientos de corte")
+st.markdown(charts.guia("tabla_solapamientos"), unsafe_allow_html=True)
 if solap is None or solap.empty:
     st.success(
         "Ningún solapamiento en este mes: en cada producto, el máximo de un "
@@ -136,6 +138,7 @@ with c1:
         'de 0 a 999 y una probabilidad no comparten unidad.</p>',
         unsafe_allow_html=True)
     if escala:
+        st.markdown(charts.guia("histograma_pd"), unsafe_allow_html=True)
         st.plotly_chart(charts.histograma_pd(pdm_mes, escala),
                         use_container_width=True, key="p4_hist")
     else:
@@ -146,6 +149,7 @@ with c2:
         '<p class="sub">Va al lado del PSI a propósito: un escalón acá explica '
         'un salto de PSI sin que ningún modelo haya cambiado.</p>',
         unsafe_allow_html=True)
+    st.markdown(charts.guia("vigencia_modelos"), unsafe_allow_html=True)
     st.plotly_chart(charts.vigencia_modelos(dist_grupo),
                     use_container_width=True, key="p4_vig")
 
@@ -199,6 +203,7 @@ st.markdown(
     unsafe_allow_html=True)
 fig1, _, _ = charts.psi_grupos_grafico(dist_grupo, prod_psi, None, col_grupo,
                                        base_movil)
+st.markdown(charts.guia("psi_general"), unsafe_allow_html=True)
 st.plotly_chart(fig1, use_container_width=True, key="p4_psi1")
 
 # --- aporte por grupo ------------------------------------------------------
@@ -207,6 +212,7 @@ st.markdown(
     '<p class="sub">Qué grupo aporta más al índice. Convierte «el PSI subió a '
     '0,31» en «subió porque G5 pasó de 8% a 14%».</p>',
     unsafe_allow_html=True)
+st.markdown(charts.guia("aporte_psi_grupo"), unsafe_allow_html=True)
 ap = charts.aporte_psi_grupo(dist_grupo, mes, prod_psi, None, col_grupo, base_movil)
 if ap.empty:
     st.info("Hacen falta al menos dos meses en la ventana.")
@@ -240,6 +246,7 @@ if modelos_psi:
     mod_psi = st.selectbox("Modelo", modelos_psi, key="p4_mod_psi")
     fig2, _, _ = charts.psi_grupos_grafico(dist_grupo, prod_psi, mod_psi,
                                            col_grupo, base_movil)
+    st.markdown(charts.guia("psi_modelo"), unsafe_allow_html=True)
     st.plotly_chart(fig2, use_container_width=True, key="p4_psi2")
 else:
     st.info("Sin modelos en la ventana.")
@@ -253,6 +260,7 @@ with st.expander("Nivel 3 · Diagnóstico: PSI sobre la PD", expanded=False):
         unsafe_allow_html=True)
     fig3, n_mostradas, n_totales, descartados = charts.psi_pd_grafico(
         pdm_serie, serie, base_movil)
+    st.markdown(charts.guia("psi_pd"), unsafe_allow_html=True)
     st.plotly_chart(fig3, use_container_width=True, key="p4_psi3")
     partes = []
     if n_totales:

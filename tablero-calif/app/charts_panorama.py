@@ -12,7 +12,9 @@ import plotly.graph_objects as go
 
 import theme
 from theme import aplicar_template as _t
-from charts_base import _sin_datos, _grupos_ordenados
+from charts_base import (
+    _sin_datos, _grupos_ordenados, banda_historica, leyenda_banda,
+    registrar_guia)
 
 
 def composicion_grupo(df: pd.DataFrame, familia: str | None = None,
@@ -276,6 +278,7 @@ def base_clientes_tiempo(df: pd.DataFrame) -> go.Figure:
     otros = [x for x in orden if x not in segmentos]
 
     fig = go.Figure()
+    hubo_banda = False
     for i, seg in enumerate(segmentos):
         # Un segmento sin fila en un mes tiene 0 clientes, no un hueco: la
         # línea tiene que bajar a cero y verse.
@@ -289,6 +292,8 @@ def base_clientes_tiempo(df: pd.DataFrame) -> go.Figure:
             line=dict(color=theme.SERIES[i], width=2, dash=theme.SERIES_DASH[i]),
             hovertemplate=nombre + " · %{y:,.0f} clientes<extra></extra>",
         )
+        hubo_banda = banda_historica(fig, s["clientes"].values,
+                                     theme.SERIES[i]) or hubo_banda
     if otros:
         s = (g[g["segmento"].isin(otros)].groupby("idx_mes")["clientes"].sum()
              .reindex(meses).fillna(0))
@@ -297,6 +302,8 @@ def base_clientes_tiempo(df: pd.DataFrame) -> go.Figure:
             line=dict(color=theme.INK_MUTED, width=1.5, dash="dot"),
             hovertemplate="otros · %{y:,.0f} clientes<extra></extra>",
         )
+    if hubo_banda:
+        leyenda_banda(fig)
     fig.update_layout(height=400)
     fig.update_xaxes(title_text="")
     fig.update_yaxes(title_text="Clientes en la base del mes", tickformat=",.0f",
@@ -368,8 +375,82 @@ def modelos_vivos(df: pd.DataFrame) -> go.Figure:
         line=dict(color=theme.SERIES[0], width=2),
         marker=dict(size=8, line=dict(color=theme.SURFACE, width=2)),
         hovertemplate="%{y} modelos vivos<extra></extra>"))
-    fig.update_layout(height=280)
+    if banda_historica(fig, g.values, theme.SERIES[0]):
+        leyenda_banda(fig)
+    fig.update_layout(height=300)
     fig.update_xaxes(title_text="", categoryorder="array", categoryarray=etiquetas)
     fig.update_yaxes(title_text="Modelos distintos en el mes", rangemode="tozero",
                      dtick=1)
     return _t(fig)
+
+
+# ===========================================================================
+# GUÍAS DE LECTURA (ver charts_base.guia)
+# ===========================================================================
+registrar_guia(
+    "composicion_grupo",
+    "Cómo se reparte cada producto entre los grupos de riesgo en el mes.",
+    "Una barra por producto que suma 100% (o el conteo, en modo absoluto), "
+    "con los grupos de G1 a G8 en el orden de la rampa. Los productos van "
+    "ordenados por su masa en G6 y peores, así que la lista ya viene "
+    "rankeada por riesgo.",
+    "Los sufi moto, cpe y con abren G7 y G8 en B/M/A: es su apertura, no un "
+    "grupo nuevo. Llama la atención un producto con la cola G7–G8 mucho más "
+    "gruesa que la de su familia, o que cambie de lugar en el orden de un "
+    "mes a otro.")
+registrar_guia(
+    "heatmap_segmento_grupo",
+    "Cómo se reparte cada segmento entre los grupos de riesgo.",
+    "Cada fila suma 100%; el color es el porcentaje dentro del segmento y el "
+    "conteo va en el hover. Segmentos en orden de valor.",
+    "El riesgo baja a medida que sube el valor del segmento: Banca Privada "
+    "más cargada hacia G1 que Social. Llama la atención una fila que rompe "
+    "ese gradiente.")
+registrar_guia(
+    "cobertura",
+    "Qué porcentaje de la base tiene grupo en cada producto.",
+    "Una barra por producto, sobre los clientes de la base del mes.",
+    "Comercial, micro y sobregiro son estructuralmente bajos: aplican a "
+    "quien tiene un pequeño negocio. Llama la atención una caída en un "
+    "producto que suele tener cobertura alta.")
+registrar_guia(
+    "comparar_meses",
+    "La composición de grupo de dos meses, lado a lado.",
+    "Los dos paneles usan el mismo orden canónico de productos, así que cada "
+    "producto queda a la misma altura en ambos.",
+    "De un mes a otro los cambios son de pocos puntos. Llama la atención una "
+    "barra cuya cola G7–G8 cambie a simple vista.")
+registrar_guia(
+    "mezcla_riesgo",
+    "El reparto de un producto entre grupos de riesgo, mes a mes.",
+    "Área apilada al 100%: el grosor de cada capa es su participación. En "
+    "porcentaje y no en conteo, porque la base viene bajando y el conteo lo "
+    "leería como mejora.",
+    "Acá no hay banda de rango habitual: habría una por capa y taparían la "
+    "composición, que es lo que se lee. Lo normal es un reparto casi "
+    "estable; llama la atención una capa que se ensancha o se adelgaza de "
+    "golpe, sobre todo G7–G8.")
+registrar_guia(
+    "base_clientes_tiempo",
+    "Los clientes de la base por segmento, mes a mes, en conteo absoluto.",
+    "Hasta cuatro segmentos en orden de valor; el resto, en «otros». La "
+    "banda sombreada es el rango habitual de cada serie.",
+    "La base viene bajando, así que cada serie tiende a quedar sobre su banda "
+    "al principio y debajo al final: es la tendencia, no una alarma. Llama la "
+    "atención un escalón de un mes a otro, o un segmento que sale de su banda "
+    "en sentido contrario al resto.")
+registrar_guia(
+    "modelos_vivos",
+    "Cuántos modelos distintos califican clientes cada mes.",
+    "Una línea; la banda es su rango habitual.",
+    "Un número estable, dentro de la banda. Un escalón es un despliegue o un "
+    "retiro: si sube, que el modelo nuevo esté en config/modelos.csv.")
+registrar_guia(
+    "vigencia_modelos",
+    "Cómo se reparte la población entre modelos, mes a mes. Todos los "
+    "modelos, sin agrupar los chicos.",
+    "Área apilada al 100%. Va al lado del PSI porque un escalón acá explica "
+    "un salto de PSI sin que ningún modelo haya cambiado.",
+    "Sin banda, por la misma razón que la mezcla de riesgo. Capas estables; "
+    "llama la atención una capa que aparece o crece de golpe: es "
+    "reasignación de población entre modelos.")

@@ -206,6 +206,7 @@ st.markdown(
     'grupo, y perder el grupo por decisión del modelo no es lo mismo que '
     'desaparecer de la población.</p>',
     unsafe_allow_html=True)
+st.markdown(charts.guia("matriz_migracion"), unsafe_allow_html=True)
 st.plotly_chart(charts.matriz_migracion(mig_mes, producto, mismo_seg, segmento),
                 use_container_width=True, key="p3_matriz")
 
@@ -214,6 +215,7 @@ st.markdown(
     '<p class="sub">Tres series, no dos: sin la de mejora, un deterioro neto '
     'estable puede esconder que suben las dos a la vez.</p>',
     unsafe_allow_html=True)
+st.markdown(charts.guia("estabilidad_deterioro"), unsafe_allow_html=True)
 st.plotly_chart(charts.estabilidad_deterioro(mig, producto),
                 use_container_width=True, key="p3_estab")
 
@@ -225,6 +227,7 @@ st.markdown(
     'más, por volumen. Es una tabla y no un gráfico a propósito: lo que se '
     'quiere es el listado accionable, no la forma.</p>',
     unsafe_allow_html=True)
+st.markdown(charts.guia("tabla_peores_saltos"), unsafe_allow_html=True)
 saltos = charts.tabla_peores_saltos(mig_mes if not mig_mes.empty else mig)
 if saltos.empty:
     st.success("Ningún salto de tres grupos o más en este corte.")
@@ -248,6 +251,7 @@ st.markdown(
     f'grande hacia él, la población que le entró es nueva — el modelo no '
     f'cambió, cambió a quién califica.</p>',
     unsafe_allow_html=True)
+st.markdown(charts.guia("flujo_modelos"), unsafe_allow_html=True)
 st.plotly_chart(charts.flujo_modelos(mig_mes, producto),
                 use_container_width=True, key="p3_flujo")
 
@@ -275,6 +279,7 @@ if mig_pd.empty:
 else:
     serie_pd = st.radio("Serie de PD", sorted(mig_pd["serie_pd"].unique()),
                         horizontal=True, key="p3_serie")
+    st.markdown(charts.guia("matriz_migracion_pd"), unsafe_allow_html=True)
     st.plotly_chart(
         charts.matriz_migracion_pd(mig_pd[mig_pd["idx_mes"] == mes_mig], serie_pd),
         use_container_width=True, key="p3_matriz_pd")

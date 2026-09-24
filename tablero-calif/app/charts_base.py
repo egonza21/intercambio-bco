@@ -10,6 +10,9 @@ de uno.
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
+
+import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 
@@ -108,3 +111,98 @@ def _grupos_ordenados(valores) -> list[str]:
     presentes = {str(v).strip() for v in valores if v is not None}
     canon = [g for g in theme.GRUPOS_ORDENADOS if g in presentes]
     return canon + sorted(presentes - set(canon))
+
+
+# ===========================================================================
+# GUÍA DE LECTURA
+# ===========================================================================
+# Un bloque con tres partes para cada visual: qué muestra, cómo se lee, y qué
+# es normal y qué debería llamar la atención. Una sola función produce el
+# HTML, y la app (st.markdown) y el export (Doc.guia) lo pintan tal cual: el
+# formato no puede divergir porque no hay dos implementaciones.
+#
+# Los textos viven al lado de cada figura, en su módulo, registrados en GUIAS
+# con registrar_guia(). Pedir una clave que no existe revienta: una guía que
+# falta tiene que notarse, no salir en blanco.
+
+@dataclass(frozen=True)
+class Guia:
+    que: str
+    como: str
+    normal: str
+
+
+GUIAS: dict[str, Guia] = {}
+
+
+def registrar_guia(clave: str, que: str, como: str, normal: str) -> None:
+    if clave in GUIAS:
+        raise ValueError(f"guía registrada dos veces: {clave}")
+    GUIAS[clave] = Guia(que, como, normal)
+
+
+def guia(clave: str) -> str:
+    """El bloque de guía como HTML con estilos en línea, para que se vea igual
+    con el CSS de la app y con el del export."""
+    g = GUIAS[clave]
+    fila = ('<div style="margin:.12rem 0"><span style="font-weight:650;'
+            f'color:{theme.INK}">{{t}}</span> {{v}}</div>')
+    cuerpo = "".join(fila.format(t=t, v=v) for t, v in (
+        ("Qué muestra.", g.que),
+        ("Cómo se lee.", g.como),
+        ("Qué es normal y qué llama la atención.", g.normal)))
+    return (f'<div class="guia" style="border-left:3px solid {theme.BORDER};'
+            f'padding:.4rem .9rem;margin:.2rem 0 .9rem;font-size:.8rem;'
+            f'line-height:1.5;color:{theme.INK_SOFT};max-width:96ch">'
+            f'{cuerpo}</div>')
+
+
+# ===========================================================================
+# BANDA DE LO NORMAL EN LAS SERIES DE TIEMPO
+# ===========================================================================
+# En una serie de tiempo "lo normal" no se escribe: se dibuja. Una banda con el
+# percentil 10 a 90 de la PROPIA serie. Así el rango habitual sale del dato de
+# esa serie y no de una frase fija que envejece.
+#
+# Se calcula SIN el último mes: si entrara, el punto que se quiere juzgar
+# ayudaría a definir su propio rango. Con la historia previa, el último punto
+# se ve adentro o afuera de la banda de un vistazo.
+
+MIN_PUNTOS_BANDA = 6    # con menos historia, un percentil no es un rango
+TEXTO_BANDA = "rango habitual: p10–p90 de la propia serie, sin el último mes"
+
+
+def rango_historico(y) -> tuple[float, float] | None:
+    """(p10, p90) de la serie sin su último punto, o None si no alcanza."""
+    v = pd.to_numeric(pd.Series(list(y)), errors="coerce").to_numpy(dtype=float)
+    hist = v[:-1]
+    hist = hist[np.isfinite(hist)]
+    if len(hist) < MIN_PUNTOS_BANDA:
+        return None
+    p10, p90 = np.percentile(hist, [10, 90])
+    return float(p10), float(p90)
+
+
+def banda_historica(fig: go.Figure, y, color: str) -> bool:
+    """Sombrea el rango habitual de una serie. Devuelve si la dibujó."""
+    r = rango_historico(y)
+    if r is None:
+        return False
+    p10, p90 = r
+    if p90 - p10 <= 0:
+        # Serie plana en toda su historia: la banda tendría alto cero.
+        fig.add_hline(y=p10, line=dict(color=color, width=6), opacity=0.12,
+                      layer="below")
+    else:
+        fig.add_hrect(y0=p10, y1=p90, fillcolor=color, opacity=0.10,
+                      line_width=0, layer="below")
+    return True
+
+
+def leyenda_banda(fig: go.Figure) -> None:
+    """Una sola entrada de leyenda que explica el sombreado. Va una vez por
+    figura aunque haya una banda por serie."""
+    fig.add_scatter(x=[None], y=[None], mode="markers", name=TEXTO_BANDA,
+                    marker=dict(symbol="square", size=13, color=theme.INK_MUTED,
+                                opacity=0.28),
+                    hoverinfo="skip", showlegend=True)

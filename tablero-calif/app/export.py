@@ -169,6 +169,11 @@ class Doc:
     def nota(self, texto: str) -> None:
         self.partes.append(f'<p class="nota">{texto}</p>')
 
+    def guia(self, clave: str) -> None:
+        """El mismo bloque de guía que la app: charts.guia() lo arma una sola
+        vez, así el formato no puede divergir entre la app y el HTML."""
+        self.partes.append(charts.guia(clave))
+
     def sub(self, texto: str) -> None:
         self.partes.append(f'<h3>{texto}</h3>')
 
@@ -236,6 +241,7 @@ def construir(desde: int, hasta: int, mes: int, rezago: int,
     doc.partes.append(
         f'<div class="banda" style="background:{fondo};border:1px solid {borde};'
         f'color:{tinta}"><b>{mensaje}</b></div>')
+    doc.guia("chequeos")
     doc.semaforo(chequeos)
     for c in chequeos:
         if c.tiene_detalle:
@@ -244,6 +250,7 @@ def construir(desde: int, hasta: int, mes: int, rezago: int,
         if c.nota:
             doc.nota(f"{c.nombre}: {c.nota}")
     doc.sub("Discordancia entre PD y grupo, mes a mes")
+    doc.guia("discordancia_pd_grupo")
     doc.figura(charts.discordancia_pd_grupo(nulos))
     doc.nota("Es el único de los cuatro chequeos donde la tendencia dice algo. "
              "Que existan filas con PD nula y grupo poblado no es un problema; "
@@ -285,6 +292,7 @@ def construir(desde: int, hasta: int, mes: int, rezago: int,
                      f"{ref.distancia} meses, mientras que el baseline se arma "
                      f"con variaciones de un mes: los puntajes están "
                      f"sobreestimados y sirven para ordenar, no como magnitud.")
+        doc.guia("ranking")
         for metrica, titulo in (("cantidad", "Por clientes calificados"),
                                 ("cobertura", "Por cobertura (% de la base)")):
             an = (ref if metrica == "cantidad"
@@ -317,6 +325,7 @@ def construir(desde: int, hasta: int, mes: int, rezago: int,
                          "Van aparte y sin puntaje: dividir por una dispersión "
                          "de cero no da un número, y como centinela "
                          "encabezaría el ranking siempre.")
+                doc.guia("sin_variabilidad")
                 vis = an.sin_variabilidad.drop(
                     columns=["serie", "_cod_seg"]).copy()
                 vis["var_rel"] = vis["var_rel"].map(lambda v: f"{v * 100:+.1f}%")
@@ -326,6 +335,7 @@ def construir(desde: int, hasta: int, mes: int, rezago: int,
                          f"ranking por tener menos de {charts.MESES_MINIMOS} "
                          f"meses de historia entre meses consecutivos.")
     doc.sub("La matriz completa · variación mes contra mes")
+    doc.guia("matriz_segmento_producto")
     doc.figura(charts.matriz_segmento_producto(cob_full, mes, "variacion"))
     # Vivía también en Panorama; queda solo acá, con los dos modos que antes
     # estaban repartidos entre las dos secciones.
@@ -353,13 +363,16 @@ def construir(desde: int, hasta: int, mes: int, rezago: int,
         ("Segmentos", theme.fmt_miles(base_mes["segmento"].nunique()) if not base_mes.empty else "--"),
     ])
     doc.sub("Composición de grupo por producto")
+    doc.guia("composicion_grupo")
     doc.figura(charts.composicion_grupo(dist_mes, "todas"))
     doc.nota("En sufi_moto, sufi_cpe y sufi_con los grupos G7 y G8 vienen "
              "abiertos en bajo, medio y alto, en tonos contiguos dentro del "
              "tramo de su grupo base.")
     doc.sub("Segmento × grupo")
+    doc.guia("heatmap_segmento_grupo")
     doc.figura(charts.heatmap_segmento_grupo(dist_mes, "todos"))
     doc.sub("Cobertura por producto")
+    doc.guia("cobertura")
     doc.figura(charts.cobertura(cob_mes, "todos"))
     doc.nota('La matriz segmento × producto está en '
              '<a href="#anomalias">Qué se movió este mes</a>.')
@@ -369,18 +382,23 @@ def construir(desde: int, hasta: int, mes: int, rezago: int,
     doc.seccion("evolucion", "Evolución",
                 f"De {theme.etiqueta_mes_idx(desde)} a {theme.etiqueta_mes_idx(hasta)}.")
     doc.sub("Mezcla de riesgo — consumo")
+    doc.guia("mezcla_riesgo")
     doc.figura(charts.mezcla_riesgo(dist, "consumo"))
     doc.sub("Base de clientes")
+    doc.guia("base_clientes_tiempo")
     doc.figura(charts.base_clientes_tiempo(base))
     doc.sub("Modelos vivos por mes")
+    doc.guia("modelos_vivos")
     doc.figura(charts.modelos_vivos(dist))
     doc.nota('El reparto de la población entre modelos está en '
              '<a href="#modelos">Modelos</a>, al lado del PSI.')
     puente = _v(data.puente_base())
     if not puente.empty:
         doc.sub("Puente de la base")
+        doc.guia("puente_base")
         doc.figura(charts.puente_base(puente, mes, "todos"))
         doc.sub("Entradas y salidas por segmento")
+        doc.guia("puente_por_segmento")
         doc.figura(charts.puente_por_segmento(puente, mes))
     doc.cierra()
 
@@ -397,6 +415,7 @@ def construir(desde: int, hasta: int, mes: int, rezago: int,
         mig = _v(data.migracion(rezago))
         mig_mes = mig[mig["idx_mes"] == mes_mig]
         doc.sub(f"Matriz de migración · consumo · {theme.etiqueta_mes_idx(mes_mig)}")
+        doc.guia("matriz_migracion")
         doc.figura(charts.matriz_migracion(mig_mes, "consumo", True))
         doc.nota("El tono dice la dirección y la intensidad el volumen, como "
                  "porcentaje de la fila de origen. La diagonal es neutra a "
@@ -408,6 +427,7 @@ def construir(desde: int, hasta: int, mes: int, rezago: int,
                  "«dejó de calificarse» es que perdió el modelo y salió del "
                  "universo calificable; «salida» es cambio de población.")
         doc.sub("Flujo de modelos")
+        doc.guia("flujo_modelos")
         doc.figura(charts.flujo_modelos(mig_mes, "consumo"))
         doc.nota(f"«{charts.SIN_MODELO}» NO son los que dejaron de ser "
                  f"calificados: acá solo entran clientes con grupo en los dos "
@@ -417,12 +437,15 @@ def construir(desde: int, hasta: int, mes: int, rezago: int,
                  f"dejaron de ser calificados están en la matriz de migración "
                  f"de grupo, en la columna «PERDIÓ · dejó de calificarse».")
         doc.sub("Estabilidad y deterioro en el tiempo")
+        doc.guia("estabilidad_deterioro")
         doc.figura(charts.estabilidad_deterioro(mig, "consumo"))
         doc.sub("Peores saltos")
+        doc.guia("tabla_peores_saltos")
         doc.tabla(charts.tabla_peores_saltos(mig_mes))
         mig_pd = _v(data.migracion_pd(rezago))
         if not mig_pd.empty:
             doc.sub("Migración de deciles de PD — serie general")
+            doc.guia("matriz_migracion_pd")
             doc.figura(charts.matriz_migracion_pd(
                 mig_pd[mig_pd["idx_mes"] == mes_mig], "general"))
             doc.nota("No se lee como la matriz de grupo: los deciles se "
@@ -448,16 +471,20 @@ def construir(desde: int, hasta: int, mes: int, rezago: int,
         ("Cortes solapados", theme.fmt_miles(len(solap)) if solap is not None else "0"),
     ])
     doc.sub("Vigencia de modelos")
+    doc.guia("vigencia_modelos")
     doc.figura(charts.vigencia_modelos(dist))
     doc.nota("Va al lado del PSI a propósito: un escalón acá explica un salto "
              "de PSI sin que ningún modelo haya cambiado.")
     doc.sub("Sensibilidad de cortes")
+    doc.guia("sensibilidad_cortes")
     doc.figura(charts.sensibilidad_cortes(cortes_mes, "todos"))
     doc.nota("Cada fila es un producto; cada banda, el rango de PD de un grupo. "
              "Como todos traducen la misma PD, las filas se comparan "
              "verticalmente. Las cruces rojas marcan solapamientos.")
     doc.sub("Solapamientos de corte")
+    doc.guia("tabla_solapamientos")
     doc.tabla(solap)
+    doc.guia("histograma_pd")
     for escala in sorted(pdm["escala"].unique()) if not pdm.empty else []:
         nombre = "puntaje 0–999" if escala == "puntaje_0_999" else "probabilidad 0–1"
         doc.sub(f"Histograma de PD — {nombre}")
@@ -499,11 +526,13 @@ def construir(desde: int, hasta: int, mes: int, rezago: int,
         'distribución de grupos de toda la población, sin partir por modelo.</p>')
     fig1, _, _ = charts.psi_grupos_grafico(dist, "todos", None, "grupo_base",
                                            base_movil)
+    doc.guia("psi_general")
     doc.figura(fig1)
 
     doc.sub("De dónde sale el número")
     doc.partes.append(
         '<p class="sub">Aporte de cada grupo al índice del mes de corte.</p>')
+    doc.guia("aporte_psi_grupo")
     doc.tabla(charts.aporte_psi_grupo(dist, mes, "todos", None, "grupo_base",
                                       base_movil), maximo=14)
 
@@ -526,6 +555,7 @@ def construir(desde: int, hasta: int, mes: int, rezago: int,
             f'Migración.</div>')
         fig2, _, _ = charts.psi_grupos_grafico(dist, "todos", mod, "grupo_base",
                                                base_movil)
+        doc.guia("psi_modelo")
         doc.figura(fig2)
 
     doc.sub("Nivel 3 · Diagnóstico: PSI sobre la PD")
@@ -533,6 +563,7 @@ def construir(desde: int, hasta: int, mes: int, rezago: int,
         '<p class="sub">¿Se movió la PD sin cruzar cortes? Sirve cuando el '
         'nivel 1 está tranquilo pero se sospecha deriva.</p>')
     fig3, n_m, n_t, descartados = charts.psi_pd_grafico(pdm, "general", base_movil)
+    doc.guia("psi_pd")
     doc.figura(fig3)
     partes = []
     if n_t:

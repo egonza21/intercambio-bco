@@ -19,7 +19,7 @@ import plotly.graph_objects as go
 
 import theme
 from theme import aplicar_template as _t
-from charts_base import _sin_datos, mes_comparacion
+from charts_base import _sin_datos, mes_comparacion, registrar_guia
 
 
 # ===========================================================================
@@ -555,3 +555,69 @@ def puente_por_segmento(df: pd.DataFrame, idx_mes: int) -> go.Figure:
                      categoryarray=list(reversed(segs)),
                      tickmode="array", tickvals=segs, ticktext=etiquetas)
     return _t(fig)
+
+
+# ===========================================================================
+# GUÍAS DE LECTURA (ver charts_base.guia)
+# ===========================================================================
+registrar_guia(
+    "ranking",
+    "Las celdas segmento × producto que más se salieron de su propia historia "
+    "este mes, con su puntaje y una miniatura de la serie.",
+    "El puntaje es cuánto se aleja la variación del mes de la mediana "
+    "histórica de esa celda, medido en MAD: una celda ruidosa necesita "
+    "moverse más para puntuar alto. Por defecto van las 3 primeras de cada "
+    "segmento, en orden de valor. La miniatura distingue un salto de una "
+    "tendencia.",
+    "Casi siempre hay filas: es un ranking, no una alarma. Llama la atención "
+    "un puntaje alto en una celda grande, una miniatura con un escalón al "
+    "final, o el mismo segmento arriba varios meses seguidos: eso es "
+    "tendencia, no ruido.")
+registrar_guia(
+    "sin_variabilidad",
+    "Celdas que se movieron este mes pero cuya variación entre meses "
+    "consecutivos había sido siempre la misma (MAD nula).",
+    "No tienen puntaje: dividir por una dispersión de cero no da un número. "
+    "Se ordenan por variación cruda.",
+    "Lo normal es que esté vacía. Cualquier fila es un movimiento real en una "
+    "celda que nunca se movía, y suele ser de lo más llamativo de la página.")
+registrar_guia(
+    "sin_baseline",
+    f"Celdas con menos de {MESES_MINIMOS} meses de historia entre meses "
+    f"consecutivos: no alcanza para una mediana y una MAD.",
+    "Va la variación cruda, sin puntaje ni ranking.",
+    "Es normal al principio de la ventana o con un producto nuevo. Si la "
+    "lista crece de un mes a otro, faltan particiones intermedias: revisar "
+    "Construcción.")
+registrar_guia(
+    "matriz_segmento_producto",
+    "Las 96 celdas segmento × producto del mes, en tres modos: clientes "
+    "calificados, cobertura sobre la base del segmento, o variación contra "
+    "el mes anterior.",
+    "Filas por valor de negocio (debajo de la línea punteada, los que no "
+    "forman escala); columnas en el orden canónico de productos. En "
+    "variación, <b>azul es baja y rojo es sube</b> — ojo, al revés que en la "
+    "migración, donde azul es mejora. Una celda en −100% es un producto o un "
+    "segmento que dejó de calificarse.",
+    "En variación, casi todas las celdas pálidas. Llama la atención una fila "
+    "o una columna entera del mismo color — un segmento o un producto que se "
+    "movió en bloque — y cualquier celda en −100%. Comercial, micro y "
+    "sobregiro tienen cobertura baja por construcción: es lo esperado.")
+registrar_guia(
+    "puente_base",
+    "La base de clientes como cascada: base del mes anterior, entradas, "
+    "salidas y base del mes.",
+    "Las entradas suman y las salidas restan; el neto va al pie con su "
+    "porcentaje.",
+    "La base viene bajando sostenidamente (−9% en 16 meses), así que un neto "
+    "negativo moderado es lo esperado. Llama la atención un salto en las "
+    "salidas, o que no haya salidas: eso es que falta el mes de referencia.")
+registrar_guia(
+    "puente_por_segmento",
+    "Entradas (a la derecha) y salidas (a la izquierda) de cada segmento en "
+    "el mes.",
+    "Segmentos en orden de valor. La diferencia entre las dos barras es el "
+    "neto del segmento.",
+    "Salidas algo mayores que entradas en casi todos: es la contracción de la "
+    "base. Llama la atención un neto negativo concentrado en un solo "
+    "segmento.")
