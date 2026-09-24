@@ -260,9 +260,10 @@ reconstruir el compartido sigue siendo un acto coordinado.
 ## Pruebas antes de commitear
 
 **Todo commit que toque `app/` corre antes `python -m unittest discover -s
-tests`** (desde `tablero-calif/`). Dos veces se rompió algo que `py_compile` e
-importar el módulo no ven —los `@dataclass` perdidos al partir `charts.py` y
-`_FAM`—, porque no ejecutan el cuerpo de las funciones.
+tests`** (desde `tablero-calif/`). Tres veces se rompió algo que `py_compile` e
+importar el módulo no ven —los `@dataclass` perdidos al partir `charts.py`,
+`_FAM`, y el SQL de `01` mal armado—, porque no ejecutan el cuerpo de las
+funciones ni miran el SQL que resulta.
 
 - `tests/test_figuras.py` llama a **todas** las funciones públicas de `charts`
   con datos sintéticos, abriendo las ramas de sus filtros, y exige que cada
@@ -271,6 +272,13 @@ importar el módulo no ven —los `@dataclass` perdidos al partir `charts.py` y
 - `tests/test_nombres.py` busca, sin ejecutar nada, nombres usados y no
   definidos en todo `app/`. Es el que atrapa un `_FAM` aunque su rama no se
   use nunca.
+- `tests/test_construccion.py` arma, sin Impala, el SQL de todos los scripts de
+  construcción y de perfilado tal como lo manda la app, y revisa **cada**
+  sentencia: que empiece con un comando, que no le quede un marcador sin
+  resolver, que las `tmp_` creadas sean las borradas, y que los conteos
+  coincidan con `00_orden.md`. Existe porque un marcador mencionado en un
+  comentario de `01` se expandía a SQL suelto y rompía "Reconstruir todo" en
+  la primera sentencia.
 
 Los datos de `tests/fixtures.py` son **inventados** con semilla fija: copian
 la forma de las tablas, no su contenido. El repo sigue sin datos.

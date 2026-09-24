@@ -810,18 +810,27 @@ def pasos(ruta: Path, idu: str | None = None) -> list[str]:
 
     Todo se resuelve ANTES de ejecutar nada: un CSV de modelos mal escrito
     falla acá, antes del primer drop, y no deja el script a medias.
+
+    El orden importa: PRIMERO se quitan los comentarios y DESPUÉS se resuelven
+    los marcadores. Al revés, un marcador mencionado en un comentario -- el
+    encabezado de 01 nombra {PRODUCTOS_DECLARADOS} -- se reemplazaba por varias
+    líneas de SQL de las que solo la primera quedaba comentada; las demás se
+    pegaban delante de la primera sentencia del script y Impala la rechazaba.
+    Rompía "Reconstruir todo" en la primera sentencia de 01.
     """
     lineas = []
-    crudo = _resolver_productos(ruta.read_text(encoding="utf-8"), ruta.name)
-    for l in crudo.splitlines():
+    for l in ruta.read_text(encoding="utf-8").splitlines():
         m = _MARCA_VERIFICACION.match(l)
         if m:
             lineas.append(f"{_CENTINELA}{m.group(1)};")
         elif not l.strip().startswith("--"):
             lineas.append(l)
+    # El chequeo de idx contra el CASE necesita el script ENTERO -- el CASE y
+    # el marcador están en sentencias distintas --, pero ya sin comentarios.
+    codigo = _resolver_productos("\n".join(lineas), ruta.name)
     return [p.strip() if p.strip().startswith(_CENTINELA)
             else _resolver_marcadores(p.strip(), idu)
-            for p in "\n".join(lineas).split(";") if p.strip()]
+            for p in codigo.split(";") if p.strip()]
 
 
 def sentencias(ruta: Path, idu: str | None = None) -> list[str]:

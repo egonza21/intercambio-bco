@@ -84,7 +84,9 @@ Sin dependencias nuevas: `unittest` es de la biblioteca estándar. Usa datos
 sin Impala y sin helper. **Correrlas antes de cada commit que toque `app/`.**
 
 Llaman a todas las funciones públicas de gráfico con datos que abren sus
-ramas, y buscan nombres usados sin definir en todo `app/`. Existen porque
+ramas, buscan nombres usados sin definir en todo `app/`, y arman el SQL de
+cada script de construcción y de perfilado —sin Impala— para revisar cada
+sentencia. Existen porque
 `py_compile` e importar un módulo no ejecutan el cuerpo de las funciones, y así
 se escaparon un `@dataclass` perdido y un diccionario borrado.
 
