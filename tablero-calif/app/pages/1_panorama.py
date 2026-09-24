@@ -239,17 +239,11 @@ with c2:
 
 # --- matriz segmento x producto -------------------------------------------
 st.markdown("---")
-st.markdown("## Segmento × producto")
-st.markdown(
-    '<p class="sub">Las 96 celdas de una vez. Los tres modos no son '
-    'redundantes: si un mes desaparecen filas enteras en vez de quedar con '
-    'grupo nulo, la <b>cobertura</b> no se mueve — bajan numerador y '
-    'denominador a la vez — pero la <b>cantidad</b> sí.</p>',
-    unsafe_allow_html=True)
-modo_m = st.radio("Modo", list(charts.MODOS_MATRIZ), horizontal=True,
-                  key="p1_modo", format_func=lambda m: charts.MODOS_MATRIZ[m])
-st.plotly_chart(charts.matriz_segmento_producto(cob_f, mes, modo_m),
-                use_container_width=True, key="p1_matriz")
+# La matriz segmento × producto estaba acá y en Anomalías. Queda solo allá:
+# es la vista completa que acompaña al ranking.
+st.page_link("pages/0_anomalias.py", icon="🔎",
+             label="La matriz segmento × producto, con sus tres modos, está "
+                   "en «Qué se movió»")
 
 # --- comparador de dos meses ----------------------------------------------
 st.markdown("---")

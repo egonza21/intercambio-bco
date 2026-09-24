@@ -327,6 +327,10 @@ def construir(desde: int, hasta: int, mes: int, rezago: int,
                          f"meses de historia entre meses consecutivos.")
     doc.sub("La matriz completa · variación mes contra mes")
     doc.figura(charts.matriz_segmento_producto(cob_full, mes, "variacion"))
+    # Vivía también en Panorama; queda solo acá, con los dos modos que antes
+    # estaban repartidos entre las dos secciones.
+    doc.sub("La matriz completa · clientes calificados")
+    doc.figura(charts.matriz_segmento_producto(cob_full, mes, "cantidad"))
     doc.cierra()
 
     dist = _v(data.distribucion_grupo())
@@ -357,8 +361,8 @@ def construir(desde: int, hasta: int, mes: int, rezago: int,
     doc.figura(charts.heatmap_segmento_grupo(dist_mes, "todos"))
     doc.sub("Cobertura por producto")
     doc.figura(charts.cobertura(cob_mes, "todos"))
-    doc.sub("Segmento × producto · clientes calificados")
-    doc.figura(charts.matriz_segmento_producto(cob, mes, "cantidad"))
+    doc.nota('La matriz segmento × producto está en '
+             '<a href="#anomalias">Qué se movió este mes</a>.')
     doc.cierra()
 
     # --- 2. Evolución ------------------------------------------------------
@@ -370,8 +374,8 @@ def construir(desde: int, hasta: int, mes: int, rezago: int,
     doc.figura(charts.base_clientes_tiempo(base))
     doc.sub("Modelos vivos por mes")
     doc.figura(charts.modelos_vivos(dist))
-    doc.sub("Reparto de la población entre modelos")
-    doc.figura(charts.vigencia_modelos(dist))
+    doc.nota('El reparto de la población entre modelos está en '
+             '<a href="#modelos">Modelos</a>, al lado del PSI.')
     puente = _v(data.puente_base())
     if not puente.empty:
         doc.sub("Puente de la base")
@@ -443,6 +447,10 @@ def construir(desde: int, hasta: int, mes: int, rezago: int,
          theme.fmt_miles(pdm[pdm["idx_mes"] == mes]["modelo"].nunique()) if not pdm.empty else "--"),
         ("Cortes solapados", theme.fmt_miles(len(solap)) if solap is not None else "0"),
     ])
+    doc.sub("Vigencia de modelos")
+    doc.figura(charts.vigencia_modelos(dist))
+    doc.nota("Va al lado del PSI a propósito: un escalón acá explica un salto "
+             "de PSI sin que ningún modelo haya cambiado.")
     doc.sub("Sensibilidad de cortes")
     doc.figura(charts.sensibilidad_cortes(cortes_mes, "todos"))
     doc.nota("Cada fila es un producto; cada banda, el rango de PD de un grupo. "

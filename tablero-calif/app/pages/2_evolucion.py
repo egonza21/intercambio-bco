@@ -80,14 +80,12 @@ with c2:
     st.plotly_chart(charts.modelos_vivos(dist),
                     use_container_width=True, key="p2_vivos")
 
-st.markdown("## Reparto de la población entre modelos")
-st.markdown(
-    '<p class="sub">Todos los modelos, sin recortar a los mayores: un modelo '
-    'nuevo entra con poca población y agruparlo en «otros» escondía justo lo '
-    'que interesa ver.</p>',
-    unsafe_allow_html=True)
-st.plotly_chart(charts.vigencia_modelos(dist),
-                use_container_width=True, key="p2_vig")
+# El reparto de la población entre modelos estaba acá y en Modelos. Queda
+# solo allá, al lado del PSI, que es donde explica algo: un escalón en la
+# vigencia explica un salto de PSI sin que ningún modelo haya cambiado.
+st.page_link("pages/4_modelos.py", icon="🧮",
+             label="El reparto de la población entre modelos está en "
+                   "Modelos, al lado del PSI")
 
 # --- puente de la base -----------------------------------------------------
 st.markdown("---")

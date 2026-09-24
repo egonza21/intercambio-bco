@@ -251,7 +251,10 @@ st.markdown("---")
 st.markdown("## La matriz completa")
 st.markdown(
     '<p class="sub">El ranking dice qué mirar; esto dice dónde está parado. '
-    'Las 96 celdas de una vez.</p>',
+    'Las 96 celdas de una vez. Los tres modos no son redundantes: si un mes '
+    'desaparecen filas enteras en vez de quedar con grupo nulo, la '
+    '<b>cobertura</b> no se mueve — bajan numerador y denominador a la vez — '
+    'pero la <b>cantidad</b> sí.</p>',
     unsafe_allow_html=True)
 modo = st.radio("Modo", list(charts.MODOS_MATRIZ), horizontal=True,
                 key="p0a_modo", format_func=lambda m: charts.MODOS_MATRIZ[m])
