@@ -288,7 +288,7 @@ def sensibilidad_cortes(df: pd.DataFrame, modelo: str | None = None) -> go.Figur
 
     d = d.sort_values(["producto", "pd_min"])
     productos = sorted(d["producto"].unique(),
-                       key=lambda p: (_FAM.get(p, "zz"), p), reverse=True)
+                       key=lambda p: (theme.familia_de(p) or "zz", p), reverse=True)
     ypos = {p: i for i, p in enumerate(productos)}
 
     fig = go.Figure()

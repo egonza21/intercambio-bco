@@ -64,26 +64,29 @@
 -- no se usan aquí y serían un regexp_replace sobre las expansiones del cross
 -- join para nada. Los tres bloques `case p.idx` sí son idénticos al
 -- fragmento canónico, que es lo que esta query valida.
+--
+-- ----------------------------------------------------------------------------
+-- Qué lado lee config/productos.csv, y por qué ese
+-- ----------------------------------------------------------------------------
+-- El lado LARGO lee el CSV (marcador {PRODUCTOS_DECLARADOS}, lo resuelve la
+-- app), igual que 01_largo_calificaciones. Tiene que ser así: lo que se quiere
+-- probar es lo que usa la construcción, idx -> producto del CSV más el CASE
+-- idx -> columna. Si este lado tuviera su propia lista escrita a mano,
+-- validaría esa copia y no el CSV: un CSV con el idx 4 rotulado 'libranza'
+-- pasaría sin marcarse.
+--
+-- El lado ANCHO NO lee el CSV y no debe: su nombre de producto escrito al lado
+-- de la columna es la referencia independiente. Es la mitad que no puede
+-- compartir nada con la otra.
+--
+-- Lo que esta query NO cubre: el CASE de acá es una copia del de
+-- 01_largo_calificaciones. Si alguien cambia el de 01 y no este, se valida la
+-- copia. Compararla contra la tabla construida (count por producto de
+-- proceso.largo_calificaciones_{IDUNICO}) cerraría ese hueco.
 -- ============================================================================
 
 with productos as (
-              select 1  as idx, 'consumo' as producto,
-                     'consumo' as familia_producto, 'general' as serie_pd
-    union all select 2,  'tdc',          'consumo',  'general'
-    union all select 3,  'libranza',     'consumo',  'general'
-    union all select 4,  'rotativo',     'consumo',  'general'
-    union all select 5,  'hip_vis',      'vivienda', 'vivienda'
-    union all select 6,  'hip_novis',    'vivienda', 'vivienda'
-    union all select 7,  'lea_hab_vis',  'vivienda', 'vivienda'
-    union all select 8,  'lea_hab_novis','vivienda', 'vivienda'
-    union all select 9,  'comercial',    'comercial','general'
-    union all select 10, 'micro',        'comercial','general'
-    union all select 11, 'sobregiro',    'comercial','general'
-    union all select 12, 'sufi_veh',     'sufi',     'general'
-    union all select 13, 'sufi_moto',    'sufi',     'general'
-    union all select 14, 'sufi_cpe',     'sufi',     'general'
-    union all select 15, 'sufi_con',     'sufi',     'general'
-    union all select 16, 'calm',         'consumo',  'general'
+              {PRODUCTOS_DECLARADOS}
 ),
 
 largo as (

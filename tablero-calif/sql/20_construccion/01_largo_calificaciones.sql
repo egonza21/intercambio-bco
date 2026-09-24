@@ -10,12 +10,23 @@
 -- Lleva `grupo IS NOT NULL`, así que NO sirve para medir cobertura: esa
 -- necesita justamente las filas sin grupo y sale de la tabla ancha en 03.
 --
--- ESTE ARCHIVO ES LA FUENTE DE VERDAD DEL MAPEO idx -> columna. Antes lo era
--- sql/_fragmentos/cte_productos.sql, un fragmento que se copiaba a mano y que
--- ya no existe: sobrevivía como "copia canónica" de algo que en realidad se
--- ejecuta acá. Las copias que hay que mantener alineadas con estos tres
--- bloques `case p.idx` son las de sql/00_perfilado/, y lo que lo verifica es
--- sql/00_perfilado/validacion_mapeo.sql.
+-- DOS MAPEOS, en dos lugares distintos:
+--
+--   idx -> producto, familia, serie   config/productos.csv. La app lo inyecta
+--                                     en el paso 1 (marcador
+--                                     {PRODUCTOS_DECLARADOS}) y lo lee el resto
+--                                     del repo: es la única lista de productos.
+--   idx -> columna de la tabla ancha  los tres bloques `case p.idx` de ESTE
+--                                     archivo. Se quedan en SQL porque nombran
+--                                     columnas físicas.
+--
+-- Que los dos digan lo mismo -- que el idx 4 del CSV sea el mismo producto
+-- cuya columna mapea el CASE con `when 4` -- lo verifica
+-- sql/00_perfilado/validacion_mapeo.sql. La app además exige que los idx del
+-- CSV sean exactamente los del CASE, o no construye.
+--
+-- Las copias de estos CASE en sql/00_perfilado/ tienen que mantenerse
+-- alineadas con estos a mano.
 --
 -- ----------------------------------------------------------------------------
 -- SIN CTEs: cada paso intermedio es una tabla física
@@ -55,23 +66,7 @@ drop table if exists proceso.tmp_largo_raw_{IDUNICO} purge;
 create table proceso.tmp_productos_{IDUNICO}
 stored as parquet
 as
-              select 1  as idx, 'consumo' as producto,
-                     'consumo' as familia_producto, 'general' as serie_pd
-    union all select 2,  'tdc',          'consumo',  'general'
-    union all select 3,  'libranza',     'consumo',  'general'
-    union all select 4,  'rotativo',     'consumo',  'general'
-    union all select 5,  'hip_vis',      'vivienda', 'vivienda'
-    union all select 6,  'hip_novis',    'vivienda', 'vivienda'
-    union all select 7,  'lea_hab_vis',  'vivienda', 'vivienda'
-    union all select 8,  'lea_hab_novis','vivienda', 'vivienda'
-    union all select 9,  'comercial',    'comercial','general'
-    union all select 10, 'micro',        'comercial','general'
-    union all select 11, 'sobregiro',    'comercial','general'
-    union all select 12, 'sufi_veh',     'sufi',     'general'
-    union all select 13, 'sufi_moto',    'sufi',     'general'
-    union all select 14, 'sufi_cpe',     'sufi',     'general'
-    union all select 15, 'sufi_con',     'sufi',     'general'
-    union all select 16, 'calm',         'consumo',  'general';
+              {PRODUCTOS_DECLARADOS};
 
 compute stats proceso.tmp_productos_{IDUNICO};
 

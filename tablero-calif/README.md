@@ -72,6 +72,22 @@ streamlit run app/main.py
 
 Requiere Streamlit 1.36 o superior (usa `st.navigation`).
 
+## Pruebas
+
+```bash
+cd tablero-calif
+python -m unittest discover -s tests -v
+```
+
+Sin dependencias nuevas: `unittest` es de la biblioteca estándar. Usa datos
+**sintéticos** (`tests/fixtures.py`, inventados con semilla fija), así que corre
+sin Impala y sin helper. **Correrlas antes de cada commit que toque `app/`.**
+
+Llaman a todas las funciones públicas de gráfico con datos que abren sus
+ramas, y buscan nombres usados sin definir en todo `app/`. Existen porque
+`py_compile` e importar un módulo no ejecutan el cuerpo de las funciones, y así
+se escaparon un `@dataclass` perdido y un diccionario borrado.
+
 La app se conecta a Impala a través de la librería interna `helper`. Esa
 llamada está aislada en **una sola función** de `app/data.py`, en el bloque
 marcado con un recuadro de comentarios. Si la firma real difiere, se ajusta ahí
@@ -163,6 +179,8 @@ app/
   pages/             una por página del tablero
 config/
   modelos.csv        los modelos y su escala; la única lista del repo
+  productos.csv      idx, producto, familia, serie; la única lista de productos
+tests/               pruebas con datos sintéticos
 ```
 
 Las figuras están partidas **por página**, que es como se piensa el tablero.

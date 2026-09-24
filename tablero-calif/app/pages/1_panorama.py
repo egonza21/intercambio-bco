@@ -40,13 +40,13 @@ with st.sidebar:
     st.markdown("## Filtros de la página")
     st.markdown('<p class="nota">Se aplican a TODO: KPIs, composición, '
                 'heatmap, cobertura y comparador.</p>', unsafe_allow_html=True)
-    familias = ["todas"] + sorted({data.FAMILIA_PRODUCTO.get(p, "otra")
+    familias = ["todas"] + sorted({theme.familia_de(p) or "otra"
                                    for p in dist.get("producto", [])})
     familia = st.selectbox("Familia de producto", familias, key="p1_familia")
     _prods = [p for p in theme.PRODUCTOS_ORDENADOS
               if p in set(dist.get("producto", []))]
     if familia != "todas":
-        _prods = [p for p in _prods if data.FAMILIA_PRODUCTO.get(p) == familia]
+        _prods = [p for p in _prods if theme.familia_de(p) == familia]
     producto = st.selectbox("Producto", ["todos"] + _prods, key="p1_prod")
     _segs = theme.segmentos_ordenados(dist.get("segmento", []))
     segmento = st.selectbox(
@@ -76,7 +76,7 @@ def _filtrar(df):
     if producto != "todos" and "producto" in d.columns:
         d = d[d["producto"] == producto]
     elif familia != "todas" and "producto" in d.columns:
-        d = d[d["producto"].map(data.FAMILIA_PRODUCTO) == familia]
+        d = d[d["producto"].map(theme.familia_de) == familia]
     return d
 
 

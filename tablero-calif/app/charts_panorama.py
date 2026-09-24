@@ -39,7 +39,7 @@ def composicion_grupo(df: pd.DataFrame, familia: str | None = None,
         return _sin_datos()
     d = df.copy()
     if familia and familia != "todas":
-        d = d[d["producto"].map(_FAM) == familia]
+        d = d[d["producto"].map(theme.familia_de) == familia]
     if d.empty:
         return _sin_datos()
 

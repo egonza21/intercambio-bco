@@ -26,23 +26,7 @@
 -- ============================================================================
 
 with productos as (
-              select 1  as idx, 'consumo' as producto,
-                     'consumo' as familia_producto, 'general' as serie_pd
-    union all select 2,  'tdc',          'consumo',  'general'
-    union all select 3,  'libranza',     'consumo',  'general'
-    union all select 4,  'rotativo',     'consumo',  'general'
-    union all select 5,  'hip_vis',      'vivienda', 'vivienda'
-    union all select 6,  'hip_novis',    'vivienda', 'vivienda'
-    union all select 7,  'lea_hab_vis',  'vivienda', 'vivienda'
-    union all select 8,  'lea_hab_novis','vivienda', 'vivienda'
-    union all select 9,  'comercial',    'comercial','general'
-    union all select 10, 'micro',        'comercial','general'
-    union all select 11, 'sobregiro',    'comercial','general'
-    union all select 12, 'sufi_veh',     'sufi',     'general'
-    union all select 13, 'sufi_moto',    'sufi',     'general'
-    union all select 14, 'sufi_cpe',     'sufi',     'general'
-    union all select 15, 'sufi_con',     'sufi',     'general'
-    union all select 16, 'calm',         'consumo',  'general'
+              {PRODUCTOS_DECLARADOS}
 ),
 
 largo as (

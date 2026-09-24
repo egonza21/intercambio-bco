@@ -1,0 +1,17 @@
+idx,producto,familia_producto,serie_pd
+1,consumo,consumo,general
+2,tdc,consumo,general
+3,libranza,consumo,general
+4,rotativo,consumo,general
+5,hip_vis,vivienda,vivienda
+6,hip_novis,vivienda,vivienda
+7,lea_hab_vis,vivienda,vivienda
+8,lea_hab_novis,vivienda,vivienda
+9,comercial,comercial,general
+10,micro,comercial,general
+11,sobregiro,comercial,general
+12,sufi_veh,sufi,general
+13,sufi_moto,sufi,general
+14,sufi_cpe,sufi,general
+15,sufi_con,sufi,general
+16,calm,consumo,general

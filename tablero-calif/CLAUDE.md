@@ -257,6 +257,24 @@ exist".
 Regla práctica: para probar, identificador propio (`v2_prueba`, `vjuan`);
 reconstruir el compartido sigue siendo un acto coordinado.
 
+## Pruebas antes de commitear
+
+**Todo commit que toque `app/` corre antes `python -m unittest discover -s
+tests`** (desde `tablero-calif/`). Dos veces se rompió algo que `py_compile` e
+importar el módulo no ven —los `@dataclass` perdidos al partir `charts.py` y
+`_FAM`—, porque no ejecutan el cuerpo de las funciones.
+
+- `tests/test_figuras.py` llama a **todas** las funciones públicas de `charts`
+  con datos sintéticos, abriendo las ramas de sus filtros, y exige que cada
+  figura salga con trazas. Una función pública nueva sin caso de prueba hace
+  fallar la prueba.
+- `tests/test_nombres.py` busca, sin ejecutar nada, nombres usados y no
+  definidos en todo `app/`. Es el que atrapa un `_FAM` aunque su rama no se
+  use nunca.
+
+Los datos de `tests/fixtures.py` son **inventados** con semilla fija: copian
+la forma de las tablas, no su contenido. El repo sigue sin datos.
+
 ## Reglas de código SQL
 
 - **Nunca `SELECT *`.** Siempre columnas explícitas.
@@ -352,12 +370,40 @@ ingestion_month   tinyint   Mes de ingestión y campo partición
 
 ## Mapeo idx → producto — fuente de verdad
 
-Este mapeo se repite en cada archivo que hace unpivot. **Es el punto más
-frágil del repo**: si un `CASE ... WHEN` queda desalineado, la query no falla,
-simplemente etiqueta mal los datos. La copia canónica vive en
-`sql/20_construccion/01_largo_calificaciones.sql`, que es el único que
-CORRE y produce la tabla larga que lee todo lo demás. Cualquier cambio ahí
-debe propagarse a las copias de `sql/00_perfilado/`.
+**Es el punto más frágil del repo**: si un `CASE ... WHEN` queda desalineado,
+la query no falla, simplemente etiqueta mal los datos. Son **dos mapeos**, y
+cada uno vive en un solo lugar:
+
+| mapeo | dónde | quién lo lee |
+|---|---|---|
+| `idx` → `producto`, `familia_producto`, `serie_pd` | **`config/productos.csv`** | la construcción (`tmp_productos`, marcador `{PRODUCTOS_DECLARADOS}`), las consultas de perfilado, y toda la app vía `theme.PRODUCTOS`, `theme.familia_de()`, `theme.serie_de()` |
+| `idx` → columna de la tabla ancha (`g_*`, `pd_*`, `modelo_*`) | los bloques `case p.idx` de `sql/20_construccion/01_largo_calificaciones.sql` | solo el SQL: nombran columnas físicas |
+
+Antes el primero estaba escrito a mano en cinco lugares: el SQL de `01`, tres
+consultas de perfilado, `theme.PRODUCTOS_ORDENADOS`, `data.FAMILIA_PRODUCTO` y
+un `_FAM` en los módulos de figuras. **`_FAM` quedó sin definir al partir
+`charts.py`** y rompió la página de Modelos con un `NameError` que solo saltaba
+al filtrar por familia o al abrir la sensibilidad de cortes. Una copia a mano
+de más es un lugar más donde el mapeo se rompe sin avisar.
+
+**Qué protege que los dos mapeos digan lo mismo** — que el idx 4 del CSV sea
+el producto cuya columna mapea el `CASE` con `when 4`:
+
+- **`sql/00_perfilado/validacion_mapeo.sql`**, que es la verificación
+  semántica. Su lado largo lee el CSV (tiene que: es lo que usa la
+  construcción) y su lado ancho tiene el nombre de cada producto escrito
+  literalmente al lado de su columna, sin CSV ni `CASE`. Si no cuadran, la
+  diferencia no da cero. **Correrla después de tocar el CSV o el `CASE`.**
+- **La app**, que antes de construir exige que los idx del CSV sean
+  exactamente los que usa el `CASE`. Es solo estructural: atrapa un idx de más
+  (sin columna, sus filas desaparecerían en el `grupo is not null`) o de menos,
+  no un idx apuntando a la columna equivocada.
+
+Las copias del `CASE` en `sql/00_perfilado/` se siguen manteniendo a mano. La
+de `validacion_mapeo` incluida: si alguien cambia el `CASE` de `01` y no ese,
+se valida la copia. Compararla contra la tabla construida cerraría el hueco.
+
+La tabla de abajo es la referencia legible; **el CSV es el que manda**.
 
 | idx | producto        | familia_producto | columnas                                                  |
 |-----|-----------------|------------------|-----------------------------------------------------------|
@@ -702,7 +748,8 @@ para separar salida de pérdida de elegibilidad. Ahí se agregan dos columnas:
 **Son dos y no una** porque el modelo, igual que la PD, se replica por cliente
 dentro de cada serie (ver "La PD no es por producto"). En el paso de
 clasificación se usa la columna de la serie que le toca al producto, vía
-`familia_producto`.
+`serie_pd` —no `familia_producto`, que es de pantalla: ver
+"`familia_producto` y `serie_pd` no son la misma columna".
 
 El join contra la base ya apunta al mes correcto sin tocarlo:
 `idx_mes_presencia` es el mes **destino** cuando falta el lado destino (que es
@@ -780,6 +827,9 @@ sí es dimensión, porque los cortes sí son por producto.
 ```
 config/
   modelos.csv        los modelos y su escala. LA ÚNICA LISTA DE MODELOS
+  productos.csv      idx, producto, familia, serie. LA ÚNICA LISTA DE PRODUCTOS
+tests/               pruebas con datos SINTÉTICOS; correrlas antes de cada
+                     commit que toque app/ (ver README)
 sql/
   00_perfilado/      chequeos de salud del dato; van contra la tabla fuente
     duplicados_ingestion_day.sql    una ingestión por mes (pendiente 1)

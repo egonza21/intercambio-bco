@@ -391,6 +391,7 @@ def _leer_perfilado(nombre: str, sentencia: int = 0) -> str:
         raise FileNotFoundError(f"No está la consulta de perfilado {ruta}")
     codigo = "\n".join(l for l in ruta.read_text(encoding="utf-8").splitlines()
                        if not l.strip().startswith("--"))
+    codigo = _resolver_productos(codigo, ruta.name)
     partes = [p.strip() for p in codigo.split(";") if p.strip()]
     return _a_parametros(partes[sentencia])
 
@@ -418,7 +419,13 @@ def cobertura_producto() -> pd.DataFrame:
     """Llega ANCHA (16 columnas cob_*) y se despivota acá, que es lo mismo que
     hacía Power Query. El SQL sale ancho a propósito: así se resuelve con 16
     count() sobre una pasada, sin cross join."""
-    df = _tabla("cobertura_producto")
+    return despivotar_cobertura(_tabla("cobertura_producto"))
+
+
+def despivotar_cobertura(df: pd.DataFrame) -> pd.DataFrame:
+    """De las 16 columnas cob_* a una fila por producto. Separada del loader
+    para que las pruebas pasen sus datos sintéticos por la MISMA
+    transformación que la app."""
     if df.empty:
         return df
     cols = [c for c in df.columns if c.startswith("cob_")]
@@ -573,14 +580,6 @@ def _con_grupo(df: pd.DataFrame) -> pd.DataFrame:
 
 # --- utilidades ------------------------------------------------------------
 
-FAMILIA_PRODUCTO = {
-    "consumo": "consumo", "tdc": "consumo", "libranza": "consumo",
-    "rotativo": "consumo", "calm": "consumo",
-    "hip_vis": "vivienda", "hip_novis": "vivienda",
-    "lea_hab_vis": "vivienda", "lea_hab_novis": "vivienda",
-    "comercial": "comercial", "micro": "comercial", "sobregiro": "comercial",
-    "sufi_veh": "sufi", "sufi_moto": "sufi", "sufi_cpe": "sufi", "sufi_con": "sufi",
-}
 
 # --- modelos: config/modelos.csv es la única lista ------------------------
 # Antes había tres copias: MODELOS_PUNTAJE y MODELOS_CONOCIDOS acá y un IN
@@ -597,9 +596,9 @@ RUTA_MODELOS = Path(__file__).resolve().parent.parent / "config" / "modelos.csv"
 # tocar nada aguas abajo.
 ESCALAS = {"probabilidad": "probabilidad_0_1", "puntaje": "puntaje_0_999"}
 
-# Mismo criterio que {IDUNICO}: el nombre se interpola en un literal SQL, y
-# esta validación es la única defensa.
-_MODELO_VALIDO = re.compile(r"^[A-Za-z0-9_]+$")
+# Mismo criterio que {IDUNICO} y que los productos: el nombre se interpola en
+# un literal SQL, y esta validación es la única defensa.
+_MODELO_VALIDO = theme.NOMBRE_SQL
 
 
 def leer_modelos(ruta: Path | None = None) -> pd.DataFrame:
@@ -647,6 +646,49 @@ def _sql_modelos_declarados(modelos: pd.DataFrame) -> str:
              for i, r in enumerate(modelos.itertuples())]
     return ("          select " + filas[0] + "\n"
             + "".join(f"union all select {f}\n" for f in filas[1:])).rstrip()
+
+
+def _sql_productos_declarados() -> str:
+    """El cuerpo de la tabla de productos, desde config/productos.csv. Los
+    nombres ya pasaron por theme.leer_productos(), que es lo que hace seguro
+    interpolarlos. Sirve tal cual como `create table ... as` y como cuerpo de
+    un CTE."""
+    filas = []
+    for i, p in enumerate(theme.PRODUCTOS):
+        if i == 0:
+            filas.append(f"          select {p.idx} as idx, '{p.producto}' as producto,\n"
+                         f"                 '{p.familia_producto}' as familia_producto, "
+                         f"'{p.serie_pd}' as serie_pd")
+        else:
+            filas.append(f"union all select {p.idx}, '{p.producto}', "
+                         f"'{p.familia_producto}', '{p.serie_pd}'")
+    return "\n".join(filas)
+
+
+_WHEN_IDX = re.compile(r"\bwhen\s+(\d+)\s+then\s+c\.[a-z]+_", re.I)
+
+
+def _chequear_idx_contra_case(sql: str, origen: str) -> None:
+    """Los idx del CSV tienen que ser exactamente los que mapean los CASE del
+    SQL que lo usa. Es el control ESTRUCTURAL: un idx de más en el CSV no
+    tendría columna y sus filas desaparecerían en el `grupo is not null`; uno
+    de menos dejaría un producto sin fila. Que cada idx apunte a la columna
+    CORRECTA es otra cosa, semántica, y la verifica validacion_mapeo.sql."""
+    en_case = {int(n) for n in _WHEN_IDX.findall(sql)}
+    en_csv = {p.idx for p in theme.PRODUCTOS}
+    if en_case and en_case != en_csv:
+        raise ValueError(
+            f"{origen}: los idx de config/productos.csv no coinciden con los "
+            f"del CASE que mapea idx -> columna. Solo en el CSV: "
+            f"{sorted(en_csv - en_case) or '-'}; solo en el CASE: "
+            f"{sorted(en_case - en_csv) or '-'}.")
+
+
+def _resolver_productos(sql: str, origen: str) -> str:
+    if "{PRODUCTOS_DECLARADOS}" not in sql:
+        return sql
+    _chequear_idx_contra_case(sql, origen)
+    return sql.replace("{PRODUCTOS_DECLARADOS}", _sql_productos_declarados())
 
 
 def clasificar_modelos(observados: pd.DataFrame,
@@ -770,7 +812,8 @@ def pasos(ruta: Path, idu: str | None = None) -> list[str]:
     falla acá, antes del primer drop, y no deja el script a medias.
     """
     lineas = []
-    for l in ruta.read_text(encoding="utf-8").splitlines():
+    crudo = _resolver_productos(ruta.read_text(encoding="utf-8"), ruta.name)
+    for l in crudo.splitlines():
         m = _MARCA_VERIFICACION.match(l)
         if m:
             lineas.append(f"{_CENTINELA}{m.group(1)};")

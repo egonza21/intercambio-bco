@@ -8,7 +8,11 @@ grupo de valores.
 """
 from __future__ import annotations
 
+import csv
 import math
+import re
+from dataclasses import dataclass
+from pathlib import Path
 
 # ---------------------------------------------------------------------------
 # Superficies y tinta
@@ -283,16 +287,104 @@ def etiquetas_segmento(codigos) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
-# Orden canónico de productos -- el del mapeo idx de CLAUDE.md
+# Productos: config/productos.csv es la única lista
 # ---------------------------------------------------------------------------
-# Se impone explícitamente en los visuales que comparan paneles, para que el
-# orden NO dependa de los datos de cada mes.
-PRODUCTOS_ORDENADOS = [
-    "consumo", "tdc", "libranza", "rotativo",
-    "hip_vis", "hip_novis", "lea_hab_vis", "lea_hab_novis",
-    "comercial", "micro", "sobregiro",
-    "sufi_veh", "sufi_moto", "sufi_cpe", "sufi_con", "calm",
-]
+# idx, producto, familia_producto y serie_pd. Antes había tres copias en Python
+# -- PRODUCTOS_ORDENADOS acá, FAMILIA_PRODUCTO en data.py y un `_FAM` en
+# charts -- además de la del SQL. `_FAM` quedó sin definir al partir charts.py y
+# rompió la página de Modelos: una copia a mano de más es un lugar más donde
+# el mapeo se puede romper sin que nada avise.
+#
+# Vive en theme y no en data porque lo necesitan los módulos de figuras, que no
+# importan data. Se lee al importar: un CSV mal escrito impide arrancar la app
+# con un error claro, en vez de dejarla funcionar con el mapeo roto.
+
+RUTA_PRODUCTOS = Path(__file__).resolve().parent.parent / "config" / "productos.csv"
+
+# Un nombre que se interpola en un literal SQL: letras, números y guion bajo.
+# El mismo criterio que {IDUNICO} y que los modelos.
+NOMBRE_SQL = re.compile(r"^[A-Za-z0-9_]+$")
+
+# serie_pd no es libre: 05, 09 y 10 arman exactamente estas dos PD a partir de
+# listas de columnas de la tabla ancha (ver CLAUDE.md, "La PD no es por
+# producto"). Una tercera serie en el CSV no tendría de dónde salir.
+SERIES_PD = ("general", "vivienda")
+
+
+@dataclass(frozen=True)
+class Producto:
+    idx: int
+    producto: str
+    familia_producto: str
+    serie_pd: str
+
+
+def leer_productos(ruta: Path | None = None) -> list[Producto]:
+    """Lee y VALIDA config/productos.csv, en orden de idx.
+
+    Falla con TODAS las líneas malas juntas. Valida lo que se puede validar
+    acá -- nombres, idx únicos, serie conocida --; que el idx del CSV sea el
+    mismo que el del CASE que mapea idx -> columna lo verifica
+    sql/00_perfilado/validacion_mapeo.sql, que no lee este archivo a propósito.
+    """
+    ruta = ruta or RUTA_PRODUCTOS
+    if not ruta.exists():
+        raise FileNotFoundError(f"No está {ruta}: es el mapeo de productos, sin "
+                                f"él la app no sabe qué productos existen.")
+    with ruta.open(encoding="utf-8", newline="") as fh:
+        lector = csv.DictReader(fh)
+        esperadas = ["idx", "producto", "familia_producto", "serie_pd"]
+        if lector.fieldnames != esperadas:
+            raise ValueError(f"{ruta.name}: las columnas tienen que ser "
+                             f"exactamente {','.join(esperadas)}; son "
+                             f"{lector.fieldnames}.")
+        crudas = [{k: (v or "").strip() for k, v in f.items()} for f in lector]
+    errores, productos = [], []
+    for linea, f in enumerate(crudas, start=2):
+        if not f["idx"].isdigit():
+            errores.append(f"línea {linea}: idx {f['idx']!r} no es un entero")
+        for col in ("producto", "familia_producto"):
+            if not NOMBRE_SQL.match(f[col]):
+                errores.append(f"línea {linea}: {col} {f[col]!r} vacío o con "
+                               f"caracteres fuera de letras, números y guion bajo")
+        if f["serie_pd"] not in SERIES_PD:
+            errores.append(f"línea {linea}: serie_pd {f['serie_pd']!r}, tiene "
+                           f"que ser {' o '.join(SERIES_PD)}")
+        if f["idx"].isdigit():
+            productos.append(Producto(int(f["idx"]), f["producto"],
+                                      f["familia_producto"], f["serie_pd"]))
+    for campo in ("idx", "producto"):
+        vals = [getattr(p, campo) for p in productos]
+        rep = sorted({v for v in vals if vals.count(v) > 1})
+        if rep:
+            errores.append(f"{campo} repetido: {rep}")
+    if not crudas:
+        errores.append("el archivo no tiene ningún producto")
+    if errores:
+        raise ValueError(f"{ruta.name} tiene errores:\n  - " + "\n  - ".join(errores))
+    return sorted(productos, key=lambda p: p.idx)
+
+
+PRODUCTOS = leer_productos()
+
+# Orden canónico: el del idx. Se impone explícitamente en los visuales que
+# comparan paneles, para que el orden NO dependa de los datos de cada mes.
+PRODUCTOS_ORDENADOS = [p.producto for p in PRODUCTOS]
+_POR_NOMBRE = {p.producto: p for p in PRODUCTOS}
+# Familias en el orden en que aparece su primer producto.
+FAMILIAS = list(dict.fromkeys(p.familia_producto for p in PRODUCTOS))
+
+
+def familia_de(producto) -> str | None:
+    """Familia de un producto. None si el producto no está en el CSV: que se
+    vea como faltante y no caiga a una familia inventada."""
+    p = _POR_NOMBRE.get(producto)
+    return p.familia_producto if p else None
+
+
+def serie_de(producto) -> str | None:
+    p = _POR_NOMBRE.get(producto)
+    return p.serie_pd if p else None
 
 # ---------------------------------------------------------------------------
 # Series categóricas -- máximo 4, en orden fijo, nunca cicladas
