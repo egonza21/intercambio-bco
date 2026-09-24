@@ -12,32 +12,39 @@ los modelos de calificación de clientes.
 
 ## Construir las tablas
 
-**Se corre una vez al mes**, cuando llega la partición nueva. Antes de la app:
-si las tablas no existen, la app no arranca.
+**Se corre una vez al mes**, cuando llega la partición nueva, desde la página
+**Construcción** de la app. Tiene el último mes de la tabla fuente al lado del
+último mes construido (si la fuente va adelante, dice que hay que
+reconstruir), el estado de cada tabla, un botón por script y uno para todo,
+con log y barra de progreso. Si un script falla se detiene ahí, porque los que
+siguen pueden depender de él.
 
-```bash
-# en orden; el prefijo numérico ES el orden
-for f in sql/20_construccion/*.sql; do
-    echo "== $f"
-    impala-shell -f "$f"      # o el cliente que uses
-done
-```
+> **Los scripts no se pueden correr a mano con `impala-shell -f`.** Llevan
+> marcadores que resuelve la app: `{IDUNICO}` en todos (impala-shell no lo
+> sustituye; su sintaxis de variables es otra) y `{MODELOS_DECLARADOS}` en
+> `05_pd_por_modelo`, que se genera desde `config/modelos.csv`. Además `05`
+> tiene una verificación que corre en la app a mitad del script y que puede
+> abortar la construcción. Corrido a mano, se la saltearía.
 
 **Ningún script usa CTEs**: cada paso intermedio es una tabla física con
 prefijo `tmp_`, que se borra al final. Eso multiplica las sentencias — la
 construcción completa son **173** repartidas en once scripts, de 3 en los más
-simples a 31 en los de migración de PD. Si el cliente no acepta varias por
-llamada hay que separarlas por `;` y ejecutarlas en secuencia; `impala-shell -f`
-lo hace solo. El detalle por script está en `00_orden.md`.
+simples a 31 en los de migración de PD. La app las ejecuta de a una: si una
+falla, el log dice cuál. El detalle por script está en `00_orden.md`.
 
 `01_largo_calificaciones` tiene que existir antes que los cuatro scripts que
 leen de ella. El detalle de dependencias está en
 `sql/20_construccion/00_orden.md`.
 
-También se puede correr **desde la app**, en la página **Construcción**: tiene
-el estado de cada tabla (si existe, cuántas filas, hasta qué mes llega), un
-botón por script y uno para todo, con log y barra de progreso. Si un script
-falla se detiene ahí, porque los que siguen pueden depender de él.
+### Los modelos: `config/modelos.csv`
+
+Es la única lista de modelos del repo, con su escala (`probabilidad` o
+`puntaje`). **Cuando entra un modelo nuevo se agrega una línea ahí** y nada
+más. Si alguien se olvida, la construcción de `pd_por_modelo` lo atrapa: un
+modelo con PD mayor a 1 que no esté declarado como puntaje hace fallar la
+construcción, y la tabla se borra en vez de quedar con los bins mal. Un modelo
+nuevo de probabilidad solo da un aviso. Detalle en `CLAUDE.md`, "Modelos y su
+escala".
 
 ### El identificador de versión
 
@@ -110,7 +117,8 @@ relectura: tecla `C` en la app, o «Clear cache» en el menú.
 ## Exportar el HTML para las revisiones
 
 ```bash
-python app/export.py --desde 202505 --hasta 202608 --mes 202608 --rezago 1
+python app/export.py                     # la ventana completa de lo construido
+python app/export.py --desde 202601 --hasta 202609 --mes 202609 --rezago 6
 ```
 
 Deja un archivo en `exportes/`, con la fecha de generación en el nombre. Se
@@ -132,7 +140,10 @@ export se genera una vez al mes: la lentitud ahí no importa.
 
 Los parámetros `--desde`, `--hasta` y `--mes` se escriben en `YYYYMM`, que es
 lo legible; internamente se convierten al índice `year*12+month` que usan las
-consultas.
+consultas. **Son opcionales**: por defecto salen de las tablas construidas,
+con el mismo cálculo que la ventana de la app, así un export sin argumentos
+siempre incluye el último mes construido. La app tampoco tiene fechas fijas:
+cada mes nuevo aparece solo al reconstruir.
 
 ## Cómo está armado
 
@@ -150,6 +161,8 @@ app/
   charts_salud.py    los cuatro chequeos de salud del dato
   export.py          arma el HTML estático con esas mismas figuras
   pages/             una por página del tablero
+config/
+  modelos.csv        los modelos y su escala; la única lista del repo
 ```
 
 Las figuras están partidas **por página**, que es como se piensa el tablero.

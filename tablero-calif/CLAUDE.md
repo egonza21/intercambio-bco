@@ -72,13 +72,28 @@ columnas entre sí antes de confiar en los agregados de PD.
 
 Verificado 2026-08-25.
 
-**La tabla arranca en 2025-05 y llega hasta 2026-08: 16 meses.** Un solo
+**La tabla arranca en 2025-05 y llega hasta 2026-08: 16 meses** (a la fecha de la verificación; hoy la ventana de la app ya no está escrita en ningún lado, ver abajo). Un solo
 `ingestion_day` por mes en los 16, sin duplicados. Cualquier `{DESDE}` menor
 a `2025 * 12 + 5 = 24305` no falla, simplemente no devuelve nada.
 
 **La base viene bajando sostenidamente: 16,6 MM en 2025-05 a 15,2 MM en
 2026-08, un -9% en 16 meses.** No es un salto puntual ni un problema de
 ingestión; es tendencia.
+
+**La ventana de la app sale del dato, no del código.** Antes estaba fija en
+mayo 2025 - agosto 2026 en `main.py` y en los valores por defecto del export,
+y por eso septiembre no aparecía aunque estuviera construido.
+`data.ventana_datos()` toma el rango donde las tres tablas base
+(`base_clientes`, `distribucion_grupo`, `cobertura_producto`) tienen datos. El
+calendario entra **solo como tope de seguridad**, nunca como límite superior:
+usarlo haría aparecer a principios de mes un mes vacío —la ingesta todavía no
+llegó— y rompería todas las comparaciones contra el mes anterior.
+
+Las tablas de migración y el puente quedan afuera del cálculo a propósito: su
+`full outer join` deja al final meses que todavía no existen, hechos solo de
+salidas (los clientes del último mes real "saliendo" hacia el futuro), uno en
+las r1 y el puente y seis en las r6. Su último mes real es el último con alguna
+fila que no sea `salida`.
 
 Esto tiene una consecuencia directa sobre los visuales:
 
@@ -644,6 +659,11 @@ El perfilado va primero porque su resultado cambia el resto del código.
    de productos del banco. Sigue abierto — se confirma más adelante. Por
    ahora se sigue usando la propuesta de la tabla "Mapeo idx → producto" tal
    cual, sin bloquear el resto del trabajo.
+   **Desde 2026-09 ya no afecta nada de PD ni de migración**: la regla de
+   negocio "qué productos comparten PD y modelo" pasó a `serie_pd`, una
+   columna propia. `familia_producto` quedó como agrupación de pantalla y se
+   puede reagrupar sin cambiar ningún cálculo. Ver "`familia_producto` y
+   `serie_pd` no son la misma columna".
 
 ## Las categorías de borde de la matriz de migración
 
@@ -758,26 +778,34 @@ sí es dimensión, porque los cortes sí son por producto.
 ## Estructura del repo
 
 ```
+config/
+  modelos.csv        los modelos y su escala. LA ÚNICA LISTA DE MODELOS
 sql/
   00_perfilado/      chequeos de salud del dato; van contra la tabla fuente
     duplicados_ingestion_day.sql    una ingestión por mes (pendiente 1)
     nulos_pd_vs_grupo.sql           pd vs grupo, nulos-cadena (2 y 3)
     dominio_grupos_y_escala_pd.sql  dominio de grupo, escala de pd (4 y 5)
     validacion_mapeo.sql            cuadra los 16 count(g_*) contra `largo`
-  20_construccion/   CREAN las tablas de proceso. Una vez al mes, sin parámetros
+    ultimo_mes_fuente.sql           hasta qué mes llega la fuente
+  20_construccion/   CREAN las tablas de proceso. Una vez al mes, desde la app
     00_orden.md             secuencia y dependencias. LEER ANTES DE CORRER
     01_largo_calificaciones  el unpivot materializado. VA PRIMERO
-    02..10                   un archivo por tabla
+    02..11                   un archivo por tabla
+    verificaciones/
+      modelos.sql            la corre la app a mitad de 05; no es un script
   30_lectura/        SELECT sin filtros sobre esas tablas. Es lo único que
                      llama Streamlit
     -- páginas funcionales (negocio)
     base_clientes.sql       clientes por mes y segmento (tabla ancha)
     cobertura_producto.sql  16 count(g_*), salida ancha, despivota en M
     distribucion_grupo.sql  composición por grupo; sin PD
-    migracion.sql           matriz de grupo sobre grupo_base, con {REZAGO}
+    migracion_r1.sql        matriz de grupo sobre grupo_base, rezago 1
+    migracion_r6.sql        ídem, rezago 6
+    puente_base.sql         entradas, salidas y permanencia de la base
     -- páginas de modelos (técnico)
     pd_por_modelo.sql       histograma y PSI de las 2 PD, bins fijos
-    migracion_pd.sql        matriz de deciles de PD, con {REZAGO}
+    migracion_pd_r1.sql     matriz de deciles de PD, rezago 1
+    migracion_pd_r6.sql     ídem, rezago 6
     cortes_por_producto.sql fronteras de corte y detección de solapamiento
 powerbi/
   notas_modelo.md    esquema estrella, parámetros M, relaciones

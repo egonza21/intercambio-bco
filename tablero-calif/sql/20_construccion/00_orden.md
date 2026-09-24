@@ -61,6 +61,21 @@ Por qué esos cinco no dependen de `largo_calificaciones`:
 
 El prefijo numérico es el orden. Correrlos en ese orden siempre funciona.
 
+**Se corren desde la página de Construcción de la app, no a mano.** Todos
+llevan `{IDUNICO}`, que resuelve la app, y `05_pd_por_modelo` además:
+
+- `{MODELOS_DECLARADOS}`, que la app reemplaza por una fila por modelo de
+  `config/modelos.csv` para armar `tmp_modelos`;
+- una línea `-- @verificacion modelos` después de `tmp_pd_escalado`. Ahí la app
+  corre `verificaciones/modelos.sql` y compara la PD de cada modelo contra lo
+  declarado. Si un modelo trae PD > 1 sin estar declarado como puntaje,
+  **aborta**: ejecuta todos los `drop` del script, tabla final incluida, y no
+  construye nada. Es mejor no tener `pd_por_modelo` que tenerla con los bins
+  mal. Ver CLAUDE.md, "Modelos y su escala".
+
+`verificaciones/` es una subcarpeta justamente para que el listado de scripts
+(`*.sql` en esta carpeta) no la tome como uno más.
+
 ## Forma de cada script
 
 ```sql
