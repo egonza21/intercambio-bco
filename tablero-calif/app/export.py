@@ -22,6 +22,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import pandas as pd  # noqa: E402
+
 import charts  # noqa: E402
 import data  # noqa: E402
 import theme  # noqa: E402
@@ -256,7 +258,7 @@ def construir(desde: int, hasta: int, mes: int, rezago: int,
     # Va antes que todo: quien abre el reporte tiene que saber dónde mirar
     # antes de mirar. Sin ventana: el baseline necesita toda la historia.
     cob_full = data.cobertura_producto()
-    ref = charts.ranking_anomalias(cob_full, mes, "cantidad", 15)
+    ref = charts.ranking_anomalias(cob_full, mes, "cantidad")
     contra = (f"{ref.mes} contra {ref.base}" if ref.idx_base is not None
               else f"{ref.mes}, sin mes anterior con el cual comparar")
     doc.seccion("anomalias", "Qué se movió este mes",
@@ -267,6 +269,11 @@ def construir(desde: int, hasta: int, mes: int, rezago: int,
                 f"no promedio y desvío, porque los incidentes pasados están "
                 f"dentro de la historia y con promedio inflarían su propia "
                 f"variabilidad.")
+    doc.nota("Si un segmento sale arriba mes tras mes, no es un defecto del "
+             "cálculo: el puntaje ya divide por la variabilidad histórica de "
+             "cada celda, así que se está moviendo en tendencia, no en ruido. "
+             "Es información. Por eso la vista va por segmento y no hay forma "
+             "de silenciar celdas.")
     if ref.idx_base is None:
         doc.nota(f"No hay ningún mes anterior a {ref.mes} en los datos: el "
                  f"ranking mide variación mes a mes y sin mes previo no "
@@ -281,16 +288,28 @@ def construir(desde: int, hasta: int, mes: int, rezago: int,
         for metrica, titulo in (("cantidad", "Por clientes calificados"),
                                 ("cobertura", "Por cobertura (% de la base)")):
             an = (ref if metrica == "cantidad"
-                  else charts.ranking_anomalias(cob_full, mes, metrica, 15))
-            doc.sub(titulo)
+                  else charts.ranking_anomalias(cob_full, mes, metrica))
+            doc.sub(f"{titulo} · las {charts.POR_SEGMENTO} primeras de cada "
+                    f"segmento")
             if an.ranking.empty:
                 doc.nota("Ninguna celda con historia suficiente superó el "
                          "piso de variación este mes.")
             else:
-                vis = an.ranking.drop(columns=["serie", "_cod_seg"]).copy()
+                # La misma vista por defecto que la app: por segmento, en el
+                # orden de valor. En el ranking global uno solo puede ocupar
+                # todas las filas.
+                segs = (theme.segmentos_ordenados(cob_full["segmento"])
+                        if not cob_full.empty else [])
+                grupos = charts.top_por_segmento(an.ranking, segs)
+                vis = pd.concat([d for _, d in grupos if not d.empty],
+                                ignore_index=True).drop(columns=["serie", "_cod_seg"])
                 vis["var_rel"] = vis["var_rel"].map(lambda v: f"{v * 100:+.1f}%")
                 vis["puntaje"] = vis["puntaje"].map(lambda v: f"{v:.1f}")
-                doc.tabla(vis, maximo=15)
+                doc.tabla(vis, maximo=len(vis))
+                vacios = [theme.etiqueta_segmento(c) for c, d in grupos if d.empty]
+                if vacios:
+                    doc.nota(f"Sin ninguna celda sobre el piso este mes: "
+                             f"{', '.join(vacios)}.")
             if not an.sin_variabilidad.empty:
                 doc.sub(f"{titulo} · sin variabilidad histórica")
                 doc.nota("Se movieron, pero su variación entre meses "

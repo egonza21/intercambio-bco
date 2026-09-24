@@ -33,9 +33,23 @@ st.markdown(
 # que haya. El recorte de ventana solo aplica al mes que se compara.
 cob = data.cobertura_producto()
 
+_segs_datos = theme.segmentos_ordenados(cob["segmento"]) if not cob.empty else []
+
 with st.sidebar:
     st.markdown("## Ranking")
-    tope = st.slider("Filas a mostrar", 5, 40, 15, key="p0a_tope")
+    vista = st.radio(
+        "Vista", ["segmento", "uno", "global"], key="p0a_vista",
+        format_func={"segmento": f"Top {charts.POR_SEGMENTO} por segmento",
+                     "uno": "Un segmento, completo",
+                     "global": "Ranking global"}.get,
+        help="Por defecto, las primeras de CADA segmento: en el ranking "
+             "global un segmento puede ocupar todas las filas y tapar al resto.")
+    seg_sel, tope = None, None
+    if vista == "uno" and _segs_datos:
+        seg_sel = st.selectbox("Segmento", _segs_datos, key="p0a_seg",
+                               format_func=theme.etiqueta_segmento)
+    if vista == "global":
+        tope = st.slider("Filas a mostrar", 5, 40, 15, key="p0a_tope")
     metrica = st.radio(
         "Métrica", ["cantidad", "cobertura"], key="p0a_metrica",
         format_func=lambda m: ("Clientes calificados" if m == "cantidad"
@@ -61,7 +75,7 @@ st.info(
     f"inflando la mediana y la MAD, que es justo lo que ensancha el baseline "
     f"y termina tapando una anomalía real.")
 
-an = charts.ranking_anomalias(cob, mes, metrica, tope)
+an = charts.ranking_anomalias(cob, mes, metrica)   # todas; la vista recorta
 rk, sin_base = an.ranking, an.sin_baseline
 
 # Contra qué mes se compara, dicho siempre y con los dos meses concretos.
@@ -91,14 +105,11 @@ def _fmt(v):
     return theme.fmt_pct(v) if es_pct else theme.fmt_miles(v)
 
 
-if rk.empty:
-    st.success(
-        "Ninguna celda con historia suficiente superó el piso de variación "
-        "este mes. Es un resultado, no un error: significa que nada se movió "
-        "lo bastante como para mirarlo.")
-else:
-    st.markdown(f"## Las {len(rk)} que más se movieron")
-    cab = st.columns([1.5, 1.5, 1, 1, 1.1, 0.9, 1.5])
+_ANCHOS = [1.5, 1.5, 1, 1, 1.1, 0.9, 1.5]
+
+
+def _encabezado():
+    cab = st.columns(_ANCHOS)
     # Columnas nombradas con el mes concreto, no "anterior"/"actual": una
     # captura de esta tabla tiene que poder leerse sin la página al lado.
     for c, t in zip(cab, ["Segmento", "Producto", an.col_base, an.col_act,
@@ -106,8 +117,11 @@ else:
         c.markdown(f'<p class="nota" style="font-weight:600;'
                    f'text-transform:uppercase;letter-spacing:.04em;'
                    f'margin-bottom:.2rem">{t}</p>', unsafe_allow_html=True)
-    for i, r in rk.iterrows():
-        c = st.columns([1.5, 1.5, 1, 1, 1.1, 0.9, 1.5])
+
+
+def _filas(df: pd.DataFrame, clave: str) -> None:
+    for i, r in df.iterrows():
+        c = st.columns(_ANCHOS)
         aparte = theme.fuera_de_escala(r["_cod_seg"])
         c[0].markdown(
             f"**{r['segmento']}**" + ("  \n<span style='font-size:.72rem;"
@@ -129,10 +143,66 @@ else:
         c[6].plotly_chart(charts.mini_serie(r["serie"]),
                           use_container_width=True,
                           config={"displayModeBar": False},
-                          key=f"p0a_sp_{i}")
+                          key=f"p0a_sp_{clave}_{i}")
 
+
+# El puntaje ya está normalizado contra la variabilidad de CADA celda. Esta
+# nota existe porque la reacción natural a ver el mismo segmento arriba todos
+# los meses es sospechar del cálculo -- y la respuesta es la contraria.
+st.markdown(
+    '<p class="nota"><b>Si un segmento sale arriba mes tras mes, no es un '
+    'defecto del cálculo.</b> El puntaje ya divide por la variabilidad '
+    'histórica de cada celda, así que una celda ruidosa necesita moverse más '
+    'para puntuar alto. Que uno aparezca siempre arriba dice que se está '
+    'moviendo <b>en tendencia, no en ruido</b>: es información. Por eso la '
+    'vista por defecto muestra las primeras de cada segmento, y por eso no '
+    'hay forma de silenciar celdas.</p>', unsafe_allow_html=True)
+
+if rk.empty:
+    st.success(
+        "Ninguna celda con historia suficiente superó el piso de variación "
+        "este mes. Es un resultado, no un error: significa que nada se movió "
+        "lo bastante como para mirarlo.")
+elif vista == "segmento":
+    st.markdown(f"## Las {charts.POR_SEGMENTO} que más se movieron en cada "
+                f"segmento")
+    _encabezado()
+    for cod, sub_df in charts.top_por_segmento(rk, _segs_datos):
+        nombre = theme.etiqueta_segmento(cod)
+        total = int((rk["_cod_seg"] == cod).sum())
+        st.markdown(
+            f'<p style="margin:.9rem 0 .1rem;font-weight:650;color:{theme.INK}">'
+            f'{nombre}<span class="nota" style="font-weight:400"> · '
+            f'{total} {"celda" if total == 1 else "celdas"} sobre el piso'
+            f'{" · fuera de la escala de valor" if theme.fuera_de_escala(cod) else ""}'
+            f'</span></p>', unsafe_allow_html=True)
+        if sub_df.empty:
+            st.markdown('<p class="nota">Ninguna celda de este segmento superó '
+                        'el piso de variación este mes.</p>',
+                        unsafe_allow_html=True)
+        else:
+            _filas(sub_df, cod)
+elif vista == "uno":
+    sub_df = rk[rk["_cod_seg"] == seg_sel].reset_index(drop=True)
+    st.markdown(f"## {theme.etiqueta_segmento(seg_sel)} · ranking completo "
+                f"({len(sub_df)})")
+    if sub_df.empty:
+        st.info("Ninguna celda de este segmento superó el piso este mes.")
+    else:
+        _encabezado()
+        _filas(sub_df, f"uno_{seg_sel}")
+else:
+    glob = rk.head(tope)
+    st.markdown(f"## Ranking global · las {len(glob)} de mayor puntaje")
+    st.markdown('<p class="nota">Todas las celdas juntas, ordenadas solo por '
+                'puntaje. Es la vista secundaria: acá un segmento puede ocupar '
+                'todas las filas.</p>', unsafe_allow_html=True)
+    _encabezado()
+    _filas(glob, "global")
+
+if not rk.empty:
     st.download_button(
-        "Descargar el ranking en CSV",
+        "Descargar el ranking completo en CSV",
         data=data.csv(rk.drop(columns=["serie"])),
         file_name=f"anomalias_{metrica}_{mes}.csv", mime="text/csv",
         key="p0a_dl")

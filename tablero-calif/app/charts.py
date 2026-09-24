@@ -40,6 +40,8 @@ from charts_anomalias import (
     MESES_MINIMOS,
     Anomalias,
     ranking_anomalias,
+    top_por_segmento,
+    POR_SEGMENTO,
     mini_serie,
     puente_base,
     puente_por_segmento)
@@ -82,7 +84,7 @@ __all__ = [
     "matriz_migracion", "matriz_migracion_pd", "matriz_segmento_producto",
     "mes_comparacion", "mezcla_riesgo", "mini_serie", "modelos_vivos",
     "psi_grupos", "psi_grupos_grafico", "psi_pd", "psi_pd_grafico",
-    "puente_base", "puente_por_segmento", "ranking_anomalias",
+    "puente_base", "puente_por_segmento", "ranking_anomalias", "top_por_segmento", "POR_SEGMENTO",
     "resumen_global", "sensibilidad_cortes", "serie_estabilidad",
     "tabla_peores_saltos", "tabla_solapamientos", "vigencia_modelos",
 ]

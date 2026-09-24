@@ -270,7 +270,7 @@ def _variaciones_consecutivas(serie: pd.Series) -> pd.Series:
 
 
 def ranking_anomalias(cob: pd.DataFrame, idx_mes: int, metrica: str = "cantidad",
-                      tope: int = 15) -> Anomalias:
+                      tope: int | None = None) -> Anomalias:
     """Celdas segmento x producto ordenadas por cuánto se salieron de SU propia
     historia.
 
@@ -366,10 +366,41 @@ def ranking_anomalias(cob: pd.DataFrame, idx_mes: int, metrica: str = "cantidad"
     if not rk.empty:
         # SOLO por magnitud del puntaje. Sin ponderar por valor de segmento: el
         # orden de valor ya se ve en la columna, que lleva el nombre.
-        rk = (rk.sort_values("puntaje", ascending=False)
-              .head(tope).reset_index(drop=True))
+        # `tope=None` devuelve todas: la vista por segmento necesita el ranking
+        # entero para sacar las primeras de cada uno.
+        rk = rk.sort_values("puntaje", ascending=False)
+        if tope is not None:
+            rk = rk.head(tope)
+        rk = rk.reset_index(drop=True)
     return Anomalias(rk, _por_variacion(sin_var), _por_variacion(sin_base),
                      idx_mes, idx_base, dist, col_base, col_act)
+
+
+POR_SEGMENTO = 3
+
+
+def top_por_segmento(rk: pd.DataFrame, segmentos, n: int = POR_SEGMENTO
+                     ) -> list[tuple[str, pd.DataFrame]]:
+    """Las `n` celdas de mayor puntaje DENTRO de cada segmento.
+
+    Es la vista por defecto. En el ranking global un segmento puede
+    monopolizar las primeras filas mes tras mes -- hoy lo hace Social -- y el
+    resto no aparece aunque tenga algo. Acá cada segmento tiene su lugar.
+
+    Devuelve (código, filas) en el ORDEN DE VALOR de theme.segmentos_ordenados,
+    con los que están fuera de la escala al final. Un segmento sin celdas
+    sobre el piso va con un DataFrame vacío y NO se omite: que ninguna celda de
+    Banca Privada se haya movido también es algo que se quiere ver.
+
+    Deliberadamente NO hay lista de celdas silenciadas. Es el mecanismo por el
+    que se esconde un problema real justo el mes que importa.
+    """
+    salida = []
+    for cod in theme.segmentos_ordenados(segmentos):
+        sub = (rk[rk["_cod_seg"] == cod].head(n) if not rk.empty
+               else pd.DataFrame(columns=rk.columns))
+        salida.append((cod, sub.reset_index(drop=True)))
+    return salida
 
 
 def mini_serie(valores: list, ancho: int = 150, alto: int = 34) -> go.Figure:
