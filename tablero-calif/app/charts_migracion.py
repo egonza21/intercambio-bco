@@ -166,7 +166,8 @@ def matriz_migracion(df: pd.DataFrame, producto: str,
     extra = np.stack([valores, share], axis=-1)
     fig = go.Figure(go.Heatmap(
         z=z_riesgo, x=ejes_x, y=ejes_y, zmid=0, zmin=-1, zmax=1,
-        colorscale=theme.ESCALA_DIVERGENTE, xgap=2, ygap=2, customdata=extra,
+        colorscale=theme.escala_divergente("malo"),  # z > 0: pasó a un grupo peor
+        xgap=2, ygap=2, customdata=extra,
         colorbar=dict(
             title=dict(text="mejora  <->  deterioro<br>(% de la fila)",
                        font=dict(size=10, color=theme.INK_MUTED)),
@@ -416,7 +417,8 @@ def matriz_migracion_pd(df: pd.DataFrame, serie: str) -> go.Figure:
 
     fig = go.Figure(go.Heatmap(
         z=z, x=ejes, y=ejes, zmid=0, zmin=-1, zmax=1,
-        colorscale=theme.ESCALA_DIVERGENTE, xgap=2, ygap=2,
+        colorscale=theme.escala_divergente("malo"),  # z > 0: subió de decil de PD
+        xgap=2, ygap=2,
         customdata=np.stack([cnt, share], axis=-1),
         colorbar=dict(title=dict(text="baja  <->  sube<br>(% de la fila)",
                                  font=dict(size=10, color=theme.INK_MUTED)),

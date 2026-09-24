@@ -408,11 +408,43 @@ SERIES_DASH = ["solid", "dash", "dot", "longdash"]
 DIV_MEJORA = "#2a78d6"    # contraste 4.30:1
 DIV_NEUTRO = "#f0efec"    # gris neutro
 DIV_DETERIORO = "#d03b3b"  # contraste 4.68:1
-ESCALA_DIVERGENTE = [
+# De la mejora (azul) al deterioro (rojo), pasando por el neutro. Privada a
+# propósito: se usa SOLO a través de escala_divergente(), que obliga a decir
+# qué significa que el número suba.
+_DIV_MEJORA_A_DETERIORO = [
     [0.0, "#0d366b"], [0.25, DIV_MEJORA], [0.45, "#dce9f8"],
     [0.5, DIV_NEUTRO],
     [0.55, "#f7ddd9"], [0.75, DIV_DETERIORO], [1.0, "#7d1f1f"],
 ]
+
+
+# Lo que usa la plantilla si un heatmap divergente no elige: gris, sin tono.
+_DIV_SIN_DECIDIR = [[0.0, "#5c5b57"], [0.5, DIV_NEUTRO], [1.0, "#5c5b57"]]
+
+
+def escala_divergente(subir: str) -> list:
+    """Escala divergente centrada en cero, con el color puesto por SIGNIFICADO.
+
+    `subir` dice qué significa que el número sea positivo, y es obligatorio:
+      "malo"   positivo -> deterioro (rojo), negativo -> mejora (azul).
+               Migración de grupo: z > 0 es pasar a un grupo peor.
+      "bueno"  positivo -> mejora (azul), negativo -> deterioro (rojo).
+               Variación de clientes calificados: bajar es lo malo.
+
+    Antes había una sola constante, ESCALA_DIVERGENTE, y el color quedaba
+    atado al SIGNO: negativo siempre azul. En la matriz segmento × producto
+    eso pintaba una caída a -100% -- justo la anomalía que se busca -- en el
+    color que en el resto del tablero significa mejora. Es el equivalente de
+    `delta_color="inverse"` de los KPIs, para los heatmaps.
+    """
+    if subir == "malo":
+        return [list(t) for t in _DIV_MEJORA_A_DETERIORO]
+    if subir == "bueno":
+        return [[round(1 - pos, 6), color]
+                for pos, color in reversed(_DIV_MEJORA_A_DETERIORO)]
+    raise ValueError(f"subir tiene que ser 'bueno' o 'malo', no {subir!r}: "
+                     f"decir qué significa que el número suba ES la decisión "
+                     f"que esta función existe para forzar.")
 
 # Categorías fuera de la escala de riesgo (no son un grupo: son población).
 GRIS_FUERA_ESCALA = "#898781"
@@ -459,7 +491,12 @@ TEMPLATE = dict(
         # Grilla horizontal muy tenue, ninguna vertical.
         xaxis={**_EJE},
         yaxis={**_EJE, "showgrid": True, "gridcolor": GRID, "gridwidth": 1, "showline": False},
-        colorscale=dict(sequential=ESCALA_SECUENCIAL, diverging=ESCALA_DIVERGENTE),
+        # Sin escala divergente "por defecto" con significado: cualquiera sería
+        # otra vez el color atado al signo, decidido en silencio. Un heatmap
+        # divergente que no elija escala_divergente(...) sale en GRISES, a
+        # propósito, para que se note que falta la decisión.
+        colorscale=dict(sequential=ESCALA_SECUENCIAL,
+                        diverging=_DIV_SIN_DECIDIR),
     )
 )
 

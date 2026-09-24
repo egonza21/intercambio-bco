@@ -44,6 +44,7 @@ import plotly.graph_objects as go  # noqa: E402
 import charts  # noqa: E402
 import data  # noqa: E402
 import fixtures as fx  # noqa: E402
+import theme  # noqa: E402
 
 M = fx.ULTIMO
 
@@ -266,6 +267,55 @@ class TestFiguras(unittest.TestCase):
                 fig = llamada(pd.DataFrame())
                 self.assertIsInstance(fig, go.Figure)
                 fig.to_json()
+
+
+class TestColorPorSignificado(unittest.TestCase):
+    """En los heatmaps divergentes el color dice lo que SIGNIFICA el valor, no
+    su signo. Cada visual declara acá si subir es bueno o malo, y la prueba
+    verifica que el extremo NEGATIVO de su escala sea el color que
+    corresponde: mejora si subir es malo, deterioro si subir es bueno.
+
+    Antes la escala era una sola y la matriz segmento × producto pintaba una
+    caída a -100% -- la anomalía que se busca -- en el color de mejora.
+    """
+    MEJORA = theme.escala_divergente("malo")[0][1]      # extremo azul
+    DETERIORO = theme.escala_divergente("bueno")[0][1]  # extremo rojo
+
+    # visual -> (figura, qué significa subir)
+    DIVERGENTES = {
+        "matriz_segmento_producto (variación)": (
+            lambda: charts.matriz_segmento_producto(F.cob, M, "variacion"), "bueno"),
+        "matriz_migracion": (
+            lambda: charts.matriz_migracion(F.mig_mes, "consumo"), "malo"),
+        "matriz_migracion_pd": (
+            lambda: charts.matriz_migracion_pd(F.mig_pd[F.mig_pd["idx_mes"] == M],
+                                               "general"), "malo"),
+    }
+
+    def test_extremo_negativo_segun_significado(self):
+        for nombre, (hacer, subir) in self.DIVERGENTES.items():
+            with self.subTest(visual=nombre, subir=subir):
+                escala = hacer().data[0].colorscale
+                negativo, positivo = escala[0][1], escala[-1][1]
+                if subir == "bueno":
+                    self.assertEqual(negativo, self.DETERIORO,
+                                     "bajar es lo malo: el extremo negativo "
+                                     "tiene que ser el color de deterioro")
+                    self.assertEqual(positivo, self.MEJORA)
+                else:
+                    self.assertEqual(negativo, self.MEJORA,
+                                     "subir es lo malo: el extremo negativo "
+                                     "tiene que ser el color de mejora")
+                    self.assertEqual(positivo, self.DETERIORO)
+
+    def test_espejo_exacto(self):
+        malo, bueno = theme.escala_divergente("malo"), theme.escala_divergente("bueno")
+        self.assertEqual([c for _, c in bueno], [c for _, c in reversed(malo)])
+        self.assertEqual([p for p, _ in bueno], [round(1 - p, 6) for p, _ in reversed(malo)])
+
+    def test_decidir_es_obligatorio(self):
+        with self.assertRaises(ValueError):
+            theme.escala_divergente("neutro")
 
 
 if __name__ == "__main__":

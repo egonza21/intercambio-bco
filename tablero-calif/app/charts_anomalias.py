@@ -113,7 +113,10 @@ def matriz_segmento_producto(cob: pd.DataFrame, idx_mes: int,
                          np.vectorize(lambda v: "" if v != v else f"{v * 100:+.0f}%")(z))
         lim = float(np.nanmax(np.abs(z))) if np.isfinite(z).any() else 1.0
         lim = max(0.05, min(lim, 1.0))
-        escala, zmin, zmax, zmid = theme.ESCALA_DIVERGENTE, -lim, lim, 0
+        # Subir es BUENO: más clientes calificados. Una caída -- y en el
+        # extremo, una celda que se fue a -100% -- va en el color de
+        # deterioro. Antes iba al revés, atado al signo.
+        escala, zmin, zmax, zmid = theme.escala_divergente("bueno"), -lim, lim, 0
         barra = dict(title=dict(text="baja &#8592; &#8594; sube",
                                 font=dict(size=10, color=theme.INK_MUTED)),
                      tickformat="+.0%", thickness=12, len=0.75, outlinewidth=0)
@@ -596,9 +599,10 @@ registrar_guia(
     "el mes anterior.",
     "Filas por valor de negocio (debajo de la línea punteada, los que no "
     "forman escala); columnas en el orden canónico de productos. En "
-    "variación, <b>azul es baja y rojo es sube</b> — ojo, al revés que en la "
-    "migración, donde azul es mejora. Una celda en −100% es un producto o un "
-    "segmento que dejó de calificarse.",
+    "variación, <b>rojo es baja y azul es sube</b>: bajar es lo malo, así que "
+    "va en el color de deterioro, igual que en el resto del tablero. Una "
+    "celda en −100% es un producto o un segmento que dejó de calificarse, y "
+    "sale en el rojo más oscuro.",
     "En variación, casi todas las celdas pálidas. Llama la atención una fila "
     "o una columna entera del mismo color — un segmento o un producto que se "
     "movió en bloque — y cualquier celda en −100%. Comercial, micro y "

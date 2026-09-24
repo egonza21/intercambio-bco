@@ -251,6 +251,15 @@ superficie). Las cifras de cada check están anotadas en `theme.py`.
   queda mejor que con una rampa de un solo tono. Las aperturas de sufi
   (`G7_B/M/A`) se interpolan dentro del tramo de su grupo base, así que leen
   como subdivisiones y no como grupos nuevos.
+- **En las escalas divergentes el color dice lo que significa el valor, no
+  su signo.** No hay una escala divergente fija: todo heatmap divergente pide
+  `theme.escala_divergente(subir="bueno" | "malo")`, y el argumento es
+  obligatorio. Es el equivalente de `delta_color="inverse"` de los KPIs.
+  Antes el negativo era siempre azul, y la matriz segmento × producto pintaba
+  una caída a −100% —la anomalía que se busca— en el color de mejora. La
+  plantilla de Plotly trae a propósito una divergente en grises, para que un
+  heatmap nuevo que no decida se vea sin tema. `tests/test_figuras.py` fija qué
+  significa subir en cada visual.
 - **La matriz de migración usa una paleta divergente centrada en la diagonal.**
   El tono dice la dirección (azul mejora, rojo deterioro) y la intensidad el
   volumen. La diagonal queda neutra sin importar su masa: es estabilidad, no
